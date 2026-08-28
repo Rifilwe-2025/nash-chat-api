@@ -16,7 +16,7 @@ Tick a phase only when its PR is **merged into `main` and its branch pruned loca
 The tick goes in the phase's own final commit (`docs(plan): …`), so it lands with the work.
 
 - [x] **Phase 0** — Repository & toolchain bootstrap · `chore/bootstrap-repo`
-- [ ] **Phase 1** — Core foundations: config, database, migrations, test harness · `feat/core-foundations`
+- [x] **Phase 1** — Core foundations: config, database, migrations, test harness · `feat/core-foundations`
 - [ ] **Phase 2** — Auth & multi-tenant isolation · `feat/auth-and-tenancy`
 - [ ] **Phase 3** — Agent CRUD, configuration & versioning · `feat/agent-crud`
 - [ ] **Phase 4** — LLM provider abstraction · `feat/llm-provider-abstraction`
@@ -203,7 +203,7 @@ check cannot be merged.
 
 ## Phase 1 — Core foundations: database, migrations, test harness
 
-- [ ] **Complete** · **Branch:** `feat/core-foundations`
+- [x] **Complete** · **Branch:** `feat/core-foundations`
 **Depends on:** Phase 0
 
 **Delivers**
