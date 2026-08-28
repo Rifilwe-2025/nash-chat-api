@@ -13,10 +13,13 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows;  source .venv/bin/activate on macOS/Linux
 pip install -r requirements.txt
 cp .env.example .env            # set DATABASE_URL
+alembic upgrade head
 python main.py
 ```
 
-The API listens on `http://127.0.0.1:8000` and `GET /health` reports status.
+The API listens on `http://127.0.0.1:8000`. `GET /health` is the liveness probe (green whenever the
+process is serving); `GET /health/ready` checks Postgres and Redis and returns **503** naming any
+dependency that is down.
 
 ## API documentation
 
@@ -80,6 +83,17 @@ ruff check .
 ruff format --check .
 mypy
 pytest
+```
+
+The suite runs against a real Postgres: it creates and migrates its own database
+(`DATABASE_TEST_URL`) and rolls each test back in a transaction.
+
+Migrations:
+
+```bash
+alembic upgrade head            # apply
+alembic downgrade -1            # step back one
+alembic revision --autogenerate -m "what changed"
 ```
 
 See `CONTRIBUTING.md` for the branch/PR workflow and commit message format.

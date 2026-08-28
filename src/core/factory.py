@@ -16,6 +16,7 @@ from src.core.lifespan import lifespan
 from src.core.middleware import RequestContextMiddleware
 from src.core.openapi import API_DESCRIPTION, TAGS_METADATA
 from src.modules.system.presentation.api import router as system_router
+from src.shared.exceptions import register_error_handlers
 
 
 def configure_logging() -> None:
@@ -52,6 +53,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    register_error_handlers(app)
 
     app.include_router(system_router)
 

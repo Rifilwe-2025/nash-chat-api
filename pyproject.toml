@@ -7,6 +7,9 @@ src = ["src", "tests"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "TID", "RUF"]
+# N818: the exception hierarchy is deliberately named `...Exception`, matching the reference
+# architecture and the `AppException` base every service raises.
+ignore = ["N818"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "os.environ".msg = "Read configuration through src.configs, never os.environ directly."

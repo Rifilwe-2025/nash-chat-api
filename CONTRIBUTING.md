@@ -14,6 +14,12 @@ python main.py                  # http://127.0.0.1:8000/health
 `docker compose up -d postgres redis` starts the dependencies if you would rather not run them
 natively. `docker compose --profile full up` also builds and runs the API container.
 
+Apply migrations before first run:
+
+```bash
+alembic upgrade head
+```
+
 ## Before you open a PR
 
 All four must be green:
@@ -24,6 +30,10 @@ ruff format --check .
 mypy
 pytest
 ```
+
+`pytest` needs a running Postgres. It creates and migrates its own database (`DATABASE_TEST_URL`,
+`nashdb_test` by default) and rolls back every test in a transaction, so it never touches your
+development data. Redis is not required — the tests that cover it use stubs.
 
 If you changed `src/configs/application.yaml`, regenerate the type stub and commit it:
 
