@@ -15,7 +15,7 @@
 Tick a phase only when its PR is **merged into `main` and its branch pruned locally and remotely**.
 The tick goes in the phase's own final commit (`docs(plan): …`), so it lands with the work.
 
-- [ ] **Phase 0** — Repository & toolchain bootstrap · `chore/bootstrap-repo`
+- [x] **Phase 0** — Repository & toolchain bootstrap · `chore/bootstrap-repo`
 - [ ] **Phase 1** — Core foundations: config, database, migrations, test harness · `feat/core-foundations`
 - [ ] **Phase 2** — Auth & multi-tenant isolation · `feat/auth-and-tenancy`
 - [ ] **Phase 3** — Agent CRUD, configuration & versioning · `feat/agent-crud`
@@ -148,7 +148,7 @@ self-review against "Done when" → merge → **prune the branch local and remot
 
 ## Phase 0 — Repository & toolchain bootstrap
 
-- [ ] **Complete** · **Branch:** `chore/bootstrap-repo` (see the bootstrap exception below)
+- [x] **Complete** · **Branch:** `chore/bootstrap-repo` (see the bootstrap exception below)
 **Depends on:** nothing
 
 **Delivers**
@@ -188,6 +188,16 @@ check cannot be merged.
 > `main` directly. Do that first, push, then cut `chore/bootstrap-repo` for the tooling, CI, and
 > protection work and PR it. Enable the ruleset as the last step of this phase. From Phase 1 onward,
 > **no commit is ever made on `main`.**
+
+> **Deferred from this phase — branch protection is not enabled.** `Rifilwe-2025/nash-chat-api` is
+> private on a GitHub Free plan, and GitHub restricts both rulesets and classic branch protection to
+> public repositories on that plan (`403: Upgrade to GitHub Pro or make this repository public`).
+> The ruleset JSON is ready to apply — PR required, 1 code-owner approval, stale approvals dismissed,
+> squash-only, required check `Lint, types & tests`, no force-push, no deletion, admin bypass — the
+> moment the repo goes public or the account upgrades. Until then the workflow in `CLAUDE.md` is
+> followed by convention, not enforced by the server: **`main` still gets nothing but merged PRs.**
+> What *is* enforced meanwhile: squash-only merges and automatic branch deletion (repo settings), CI
+> on every PR and push, and the local `commit-msg` hook.
 
 ---
 
