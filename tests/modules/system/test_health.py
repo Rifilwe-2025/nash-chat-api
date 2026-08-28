@@ -23,3 +23,10 @@ async def test_health_assigns_request_id_when_absent(client: AsyncClient) -> Non
     response = await client.get("/health")
 
     assert response.headers.get("x-request-id")
+
+
+async def test_health_omits_null_envelope_fields(client: AsyncClient) -> None:
+    body = (await client.get("/health")).json()
+
+    assert "error" not in body
+    assert "message" not in body

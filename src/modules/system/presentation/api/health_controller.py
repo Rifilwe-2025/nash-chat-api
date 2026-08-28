@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import Depends
 
 from src.modules.system.domain.services import SystemService
 from src.modules.system.presentation.dtos.health import HealthResponse
-from src.shared.responses import ApiResponse
+from src.shared.responses import ApiResponse, create_router
 
-router = APIRouter(tags=["system"])
+router = create_router(tags=["system"])
 
 
 def get_system_service() -> SystemService:
