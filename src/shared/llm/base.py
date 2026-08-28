@@ -1,0 +1,112 @@
+"""The one internal interface every LLM provider implements (spec §5.3).
+
+Nothing outside ``src/shared/llm`` should import a vendor SDK. Modules ask the registry for a
+provider and talk to it through :class:`LLMProvider`, so switching an agent from Gemini to Claude is
+a configuration change with no code change (spec §10).
+
+Deliberately *not* a lowest-common-denominator wrapper: where providers genuinely differ (Claude
+requires ``max_tokens``, current Claude models reject ``temperature``, Gemini puts the system prompt
+in its own field), the adapter absorbs the difference rather than the caller.
+"""
+
+from __future__ import annotations
+
+import enum
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+
+class Role(str, enum.Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+@dataclass(frozen=True, slots=True)
+class ChatMessage:
+    """One conversational turn. The system prompt is passed separately, not as a message."""
+
+    role: Role
+    content: str
+
+
+@dataclass(frozen=True, slots=True)
+class ToolDefinition:
+    """A tool the model may call. Execution is Phase 11 — this is the shape only."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class TokenUsage:
+    """Per-call accounting, used for cost tracking (spec §5.3, §5.8)."""
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    def __add__(self, other: TokenUsage) -> TokenUsage:
+        return TokenUsage(
+            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
+            completion_tokens=self.completion_tokens + other.completion_tokens,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionRequest:
+    """Everything a provider needs for one turn, in provider-neutral terms."""
+
+    messages: Sequence[ChatMessage]
+    model: str
+    system: str | None = None
+    max_tokens: int = 1024
+    temperature: float | None = None
+    tools: Sequence[ToolDefinition] = ()
+    stop_sequences: Sequence[str] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionResult:
+    """A normalised response. ``raw_finish_reason`` keeps the provider's own wording for logs."""
+
+    content: str
+    usage: TokenUsage
+    model: str
+    provider: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    raw_finish_reason: str | None = None
+
+
+class LLMProvider(ABC):
+    """Adapters implement this and nothing else is allowed to leak out of them."""
+
+    name: str
+
+    @abstractmethod
+    async def complete(self, request: CompletionRequest) -> CompletionResult:
+        """Run one turn and return the whole response."""
+
+    @abstractmethod
+    def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
+        """Yield text deltas as they arrive.
+
+        Returns the iterator rather than being an async generator itself, so implementations can
+        open their own streaming context managers.
+        """
+
+    async def aclose(self) -> None:
+        """Release provider resources. Overridden where the SDK holds connections."""
+        return None
