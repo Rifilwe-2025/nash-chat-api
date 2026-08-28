@@ -23,6 +23,8 @@
 - [ ] No cross-module imports of another module's `internal/`
 - [ ] Every endpoint returns `ApiResponse` / `PaginatedResponse`
 - [ ] Config read through `src.configs`, not the environment
+- [ ] New endpoints documented in Swagger: tag (described in `src/core/openapi.py`), summary,
+      description, response model, and `responses` for each meaningful failure
 
 ## Notes / follow-ups
 

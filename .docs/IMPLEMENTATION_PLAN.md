@@ -163,7 +163,11 @@ self-review against "Done when" → merge → **prune the branch local and remot
   format; a typed settings accessor.
 - `src/core/factory.py` (`create_app()`), `lifespan.py`, `middleware.py` (raw ASGI request logging +
   `X-Request-ID`); `main.py` entrypoint.
-- `src/shared/responses/api_response.py` — the `ApiResponse` / `PaginatedResponse` envelope.
+- `src/shared/responses/api_response.py` — the `ApiResponse` / `PaginatedResponse` envelope, plus
+  `router.py`'s `create_router()` so every module's routes serialise with `exclude_none`/`by_alias`.
+- `src/core/openapi.py` + Swagger UI (`/docs`), ReDoc (`/redoc`) and the schema (`/openapi.json`),
+  paths configurable under the `docs` section — the documentation standard every later phase follows
+  is in `CLAUDE.md`.
 - `src/modules/system/` — the first module in the canonical shape, serving `GET /health`.
 - `docker-compose.yml` (Postgres + Redis) and a `Dockerfile` for the API.
 - `.github/workflows/ci.yml` — `ruff check`, `ruff format --check`, `mypy src`, `pytest` against a

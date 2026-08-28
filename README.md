@@ -16,8 +16,20 @@ cp .env.example .env            # set DATABASE_URL
 python main.py
 ```
 
-The API listens on `http://127.0.0.1:8000`; `GET /health` reports status, and interactive docs are
-at `/docs`.
+The API listens on `http://127.0.0.1:8000` and `GET /health` reports status.
+
+## API documentation
+
+| | |
+|---|---|
+| Swagger UI | <http://127.0.0.1:8000/docs> |
+| ReDoc | <http://127.0.0.1:8000/redoc> |
+| OpenAPI schema | <http://127.0.0.1:8000/openapi.json> |
+
+Paths and availability are configurable under the `docs` section of `application.yaml`
+(`DOCS_ENABLED`, `DOCS_SWAGGER_PATH`, `DOCS_REDOC_PATH`, `DOCS_OPENAPI_PATH`). Every endpoint
+carries a tag, summary, description, and explicit response model — CI fails if a route is
+undocumented.
 
 Dependencies via containers instead:
 

@@ -31,6 +31,11 @@ If you changed `src/configs/application.yaml`, regenerate the type stub and comm
 python -m src.configs.generate
 ```
 
+If you added an endpoint, it must appear correctly in Swagger UI (`/docs`): a router `tags=[...]`
+with the tag described in `src/core/openapi.py`, plus a `summary`, a `description`, an explicit
+`ApiResponse[...]` response model, and a `responses={...}` entry per meaningful failure. CI fails on
+any route missing a tag or summary.
+
 ## How changes land
 
 `main` is protected: no direct pushes. Branch, PR, green CI, code-owner approval, squash-merge,

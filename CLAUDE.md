@@ -68,6 +68,31 @@ Full directory tree, the module-to-phase table, and where each piece lands are i
 - Tenant scoping lives in the shared repository base, so no module can query across tenants by
   accident.
 
+### API documentation (Swagger) — every endpoint, every phase
+
+The OpenAPI schema is a deliverable, not a by-product: spec §5.6 generates each tenant's
+integration docs from it, and §10 requires a developer to integrate against them without support.
+Swagger UI is at `/docs`, ReDoc at `/redoc`, the raw schema at `/openapi.json` — all configurable
+under the `docs` section of `application.yaml`.
+
+**An endpoint is not finished until it is documented.** Every route must carry:
+
+- a `tags=[...]` on its router, with the tag described in `src/core/openapi.py::TAGS_METADATA` —
+  add the entry in the same phase that adds the module;
+- a `summary` (a short imperative phrase) and a `description` covering what it does and any
+  non-obvious behaviour;
+- an explicit `response_model` — the `ApiResponse[...]` / `PaginatedResponse[...]` wrapper, never a
+  bare dict;
+- a `responses={...}` entry for each meaningful failure (401, 403, 404, 409, 422, 429…) with the
+  `error.code` a caller should expect;
+- request/response DTO fields carrying `Field(description=...)` and `examples=[...]` wherever the
+  meaning is not obvious from the name.
+
+`tests/test_openapi.py::test_every_route_is_documented` fails CI on any route missing a tag or
+summary — treat it as the floor, not the goal. Routers are built with `create_router()` from
+`src.shared.responses` so the envelope's `exclude_none` / `by_alias` serialisation is applied
+consistently; do not construct a bare `APIRouter`.
+
 The LLM provider abstraction is `src/shared/llm/`, not a module — infrastructure, the role
 `src/shared/inference/` plays in `aura_api`.
 
