@@ -1,0 +1,29 @@
+# Source of truth for configuration shape and defaults.
+# Every value uses the format:  "${ENV_VAR:default} | type"
+# The environment variable wins when set; otherwise the default is used.
+# Supported types: str, int, float, bool, list
+
+app:
+  name: "${APP_NAME:Nash Chat API} | str"
+  env: "${APP_ENV:local} | str"
+  version: "${APP_VERSION:0.1.0} | str"
+  debug: "${DEBUG:false} | bool"
+
+server:
+  host: "${HOST:127.0.0.1} | str"
+  port: "${PORT:8000} | int"
+
+database:
+  url: "${DATABASE_URL:postgresql+asyncpg://postgres:qwerty@localhost:5432/nashdb} | str"
+  echo: "${DATABASE_ECHO:false} | bool"
+  pool_size: "${DATABASE_POOL_SIZE:10} | int"
+  max_overflow: "${DATABASE_MAX_OVERFLOW:5} | int"
+
+redis:
+  url: "${REDIS_URL:redis://localhost:6379/0} | str"
+
+logging:
+  level: "${LOG_LEVEL:INFO} | str"
+
+cors:
+  allow_origins: "${CORS_ALLOW_ORIGINS:http://localhost:3000} | list"
