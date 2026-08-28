@@ -19,7 +19,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 1** — Core foundations: config, database, migrations, test harness · `feat/core-foundations`
 - [x] **Phase 2** — Auth & multi-tenant isolation · `feat/auth-and-tenancy`
 - [x] **Phase 3** — Agent CRUD, configuration & versioning · `feat/agent-crud`
-- [ ] **Phase 4** — LLM provider abstraction · `feat/llm-provider-abstraction`
+- [x] **Phase 4** — LLM provider abstraction · `feat/llm-provider-abstraction`
 - [ ] **Phase 5** — Knowledge base: model, sources & extraction · `feat/kb-ingestion`
 - [ ] **Phase 6** — Retrieval: Tier 1 injection + Tier 2 keyword search · `feat/kb-retrieval-tiers`
 - [ ] **Phase 7** — Conversation engine & prompt assembly · `feat/conversation-engine`
@@ -278,7 +278,7 @@ config version through the API, with isolation tests on every route.
 
 ## Phase 4 — LLM provider abstraction
 
-- [ ] **Complete** · **Branch:** `feat/llm-provider-abstraction`
+- [x] **Complete** · **Branch:** `feat/llm-provider-abstraction`
 **Depends on:** Phase 3
 
 **Delivers**

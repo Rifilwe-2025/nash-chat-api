@@ -23,6 +23,19 @@ database:
 redis:
   url: "${REDIS_URL:redis://localhost:6379/0} | str"
 
+llm:
+  # Platform-provided credentials. Tenant bring-your-own keys are spec §9's open question —
+  # the interface already threads a per-call key, so that decision does not change this shape.
+  anthropic_api_key: "${ANTHROPIC_API_KEY:} | str"
+  openai_api_key: "${OPENAI_API_KEY:} | str"
+  gemini_api_key: "${GEMINI_API_KEY:} | str"
+  request_timeout_seconds: "${LLM_REQUEST_TIMEOUT_SECONDS:60} | float"
+  max_attempts: "${LLM_MAX_ATTEMPTS:3} | int"
+  retry_base_delay_seconds: "${LLM_RETRY_BASE_DELAY_SECONDS:0.5} | float"
+  retry_max_delay_seconds: "${LLM_RETRY_MAX_DELAY_SECONDS:8} | float"
+  # Provider used when the configured one is rate limited or down. Empty disables fallback.
+  fallback_provider: "${LLM_FALLBACK_PROVIDER:} | str"
+
 auth:
   # Override JWT_SECRET_KEY in every deployed environment — the default is for local use only.
   jwt_secret: "${JWT_SECRET_KEY:local-development-secret-change-me} | str"
