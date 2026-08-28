@@ -48,7 +48,8 @@ def render() -> str:
 
 
 def main() -> None:
-    STUB_FILE.write_text(render(), encoding="utf-8")
+    # newline="\n" keeps the output byte-identical on Windows and on Linux CI.
+    STUB_FILE.write_text(render(), encoding="utf-8", newline="\n")
     print(f"wrote {STUB_FILE}")
 
 

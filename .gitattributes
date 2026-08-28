@@ -1,0 +1,17 @@
+# Normalise line endings so files generated on Windows and on Linux CI compare equal.
+# Without this, `python -m src.configs.generate` rewrites the whole stub on Ubuntu runners.
+* text=auto eol=lf
+
+# Shell scripts must keep LF to stay executable on Linux and in Git Bash.
+*.sh text eol=lf
+.githooks/* text eol=lf
+
+# Binary assets are never converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
