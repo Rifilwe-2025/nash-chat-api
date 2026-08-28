@@ -42,6 +42,7 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+asyncpg://postgres:qwerty@localhost:5432/nashdb
+      DATABASE_TEST_URL: postgresql+asyncpg://postgres:qwerty@localhost:5432/nashdb_test
       REDIS_URL: redis://localhost:6379/0
 
     steps:
