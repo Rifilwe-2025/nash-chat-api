@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from src import configs
 
 # Importing the models registers them on Base.metadata for autogenerate.
+from src.modules.agents.domain import models as agent_models  # noqa: F401
 from src.modules.auth.domain import models as auth_models  # noqa: F401
 from src.modules.tenants.domain import models as tenant_models  # noqa: F401
 from src.shared.database.base_model import Base
