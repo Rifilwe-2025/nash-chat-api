@@ -15,10 +15,21 @@ from typing import Any, Generic, TypeVar
 from sqlalchemy import Select, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.shared.database.base_model import BaseModel
+from src.shared.database.base_model import BaseModel, TenantScopedModel
 from src.shared.database.pagination import Page, PageRequest
 
+
+class CrossTenantAccessError(RuntimeError):
+    """Raised when a scoped repository is handed an entity from a different tenant.
+
+    A programming error rather than a client error: reaching this means an object was loaded through
+    an unscoped path. It is deliberately not an ``AppException`` — it should surface as a 500 and be
+    fixed, not returned to a caller as a routine failure.
+    """
+
+
 ModelT = TypeVar("ModelT", bound=BaseModel)
+TenantModelT = TypeVar("TenantModelT", bound=TenantScopedModel)
 
 
 class BaseRepository(Generic[ModelT]):
@@ -80,3 +91,52 @@ class BaseRepository(Generic[ModelT]):
         result = await self.session.execute(delete(self.model).where(self.model.id == entity_id))
         await self.session.flush()
         return result.rowcount or 0
+
+
+class TenantScopedRepository(BaseRepository[TenantModelT]):
+    """Repository that cannot see outside its tenant.
+
+    The scope is applied in ``_base_query``, which every read goes through, and re-applied on the
+    bulk delete that bypasses it. Constructing one requires a ``tenant_id``, so there is no way to
+    ask for "all rows" by forgetting a filter — the isolation is enforced by the query layer rather
+    than by each endpoint remembering (spec §5.7).
+    """
+
+    model: type[TenantModelT]
+
+    def __init__(self, session: AsyncSession, tenant_id: uuid.UUID) -> None:
+        super().__init__(session)
+        self.tenant_id = tenant_id
+
+    def _base_query(self) -> Select[tuple[TenantModelT]]:
+        return select(self.model).where(self.model.tenant_id == self.tenant_id)
+
+    async def add(self, entity: TenantModelT) -> TenantModelT:
+        """Stamp the tenant on insert so a caller cannot write into another tenant."""
+        entity.tenant_id = self.tenant_id
+        return await super().add(entity)
+
+    async def update(self, entity: TenantModelT, **changes: Any) -> TenantModelT:
+        self._assert_owned(entity)
+        changes.pop("tenant_id", None)
+        return await super().update(entity, **changes)
+
+    async def delete(self, entity: TenantModelT) -> None:
+        self._assert_owned(entity)
+        await super().delete(entity)
+
+    async def delete_by_id(self, entity_id: uuid.UUID) -> int:
+        result = await self.session.execute(
+            delete(self.model).where(
+                self.model.id == entity_id,
+                self.model.tenant_id == self.tenant_id,
+            )
+        )
+        await self.session.flush()
+        return result.rowcount or 0
+
+    def _assert_owned(self, entity: TenantModelT) -> None:
+        if entity.tenant_id != self.tenant_id:
+            raise CrossTenantAccessError(
+                f"{type(entity).__name__} {entity.id} belongs to another tenant"
+            )

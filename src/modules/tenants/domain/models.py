@@ -8,13 +8,12 @@ accounts are out of scope for v1.
 from __future__ import annotations
 
 import enum
-import uuid
 
 from sqlalchemy import Enum as SqlEnum
-from sqlalchemy import ForeignKey, String, UniqueConstraint, Uuid
+from sqlalchemy import String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.shared.database.base_model import BaseModel
+from src.shared.database.base_model import BaseModel, TenantScopedModel
 
 
 class TenantPlan(str, enum.Enum):
@@ -46,16 +45,12 @@ class Tenant(BaseModel):
     )
 
 
-class User(BaseModel):
+class User(TenantScopedModel):
+    """``tenant_id`` comes from :class:`TenantScopedModel` — see spec §5.7."""
+
     __tablename__ = "user"
     __table_args__ = (UniqueConstraint("email", name="uq_user_email"),)
 
-    tenant_id: Mapped[uuid.UUID] = mapped_column(
-        Uuid(as_uuid=True),
-        ForeignKey("tenant.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     email: Mapped[str] = mapped_column(String(320), nullable=False)
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)

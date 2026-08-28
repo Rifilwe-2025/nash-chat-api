@@ -23,6 +23,13 @@ database:
 redis:
   url: "${REDIS_URL:redis://localhost:6379/0} | str"
 
+auth:
+  # Override JWT_SECRET_KEY in every deployed environment — the default is for local use only.
+  jwt_secret: "${JWT_SECRET_KEY:local-development-secret-change-me} | str"
+  jwt_algorithm: "${JWT_ALGORITHM:HS256} | str"
+  access_ttl_minutes: "${ACCESS_TOKEN_TTL_MINUTES:15} | int"
+  refresh_ttl_days: "${REFRESH_TOKEN_TTL_DAYS:14} | int"
+
 docs:
   enabled: "${DOCS_ENABLED:true} | bool"
   swagger_path: "${DOCS_SWAGGER_PATH:/docs} | str"

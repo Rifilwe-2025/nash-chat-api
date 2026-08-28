@@ -30,4 +30,21 @@ TAGS_METADATA: list[dict[str, Any]] = [
         "name": "system",
         "description": "Service health and readiness probes.",
     },
+    {
+        "name": "auth",
+        "description": (
+            "Account creation and session management. Sign up or sign in to receive an access "
+            "token and a refresh token; send the access token as `Authorization: Bearer <token>`. "
+            "Issuing a new pair revokes every token held previously, and logout takes effect "
+            "immediately."
+        ),
+    },
+    {
+        "name": "account",
+        "description": (
+            "The signed-in user and the tenant they belong to. The tenant is always resolved from "
+            "the access token, so these endpoints can only ever read or modify the caller's own "
+            "organisation."
+        ),
+    },
 ]
