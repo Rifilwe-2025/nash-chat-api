@@ -17,7 +17,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 
 - [x] **Phase 0** — Repository & toolchain bootstrap · `chore/bootstrap-repo`
 - [x] **Phase 1** — Core foundations: config, database, migrations, test harness · `feat/core-foundations`
-- [ ] **Phase 2** — Auth & multi-tenant isolation · `feat/auth-and-tenancy`
+- [x] **Phase 2** — Auth & multi-tenant isolation · `feat/auth-and-tenancy`
 - [ ] **Phase 3** — Agent CRUD, configuration & versioning · `feat/agent-crud`
 - [ ] **Phase 4** — LLM provider abstraction · `feat/llm-provider-abstraction`
 - [ ] **Phase 5** — Knowledge base: model, sources & extraction · `feat/kb-ingestion`
@@ -229,7 +229,7 @@ envelope rather than a traceback.
 
 ## Phase 2 — Auth & multi-tenant isolation
 
-- [ ] **Complete** · **Branch:** `feat/auth-and-tenancy`
+- [x] **Complete** · **Branch:** `feat/auth-and-tenancy`
 **Depends on:** Phase 1
 
 **Delivers**
