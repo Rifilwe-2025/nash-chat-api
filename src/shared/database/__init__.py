@@ -1,4 +1,4 @@
-from src.shared.database.base_model import Base, BaseModel
+from src.shared.database.base_model import Base, BaseModel, TenantScopedModel
 from src.shared.database.dependencies import SessionDep, get_session, get_session_factory
 from src.shared.database.engine import create_engine, create_session_factory
 from src.shared.database.pagination import (
@@ -8,17 +8,24 @@ from src.shared.database.pagination import (
     PageRequest,
     page_params,
 )
-from src.shared.database.repository import BaseRepository
+from src.shared.database.repository import (
+    BaseRepository,
+    CrossTenantAccessError,
+    TenantScopedRepository,
+)
 
 __all__ = [
     "MAX_PAGE_SIZE",
     "Base",
     "BaseModel",
     "BaseRepository",
+    "CrossTenantAccessError",
     "Page",
     "PageParamsDep",
     "PageRequest",
     "SessionDep",
+    "TenantScopedModel",
+    "TenantScopedRepository",
     "create_engine",
     "create_session_factory",
     "get_session",

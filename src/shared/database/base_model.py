@@ -10,8 +10,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, MetaData, Uuid, func
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import DateTime, ForeignKey, MetaData, Uuid, func
+from sqlalchemy.orm import DeclarativeBase, Mapped, declared_attr, mapped_column
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -50,3 +50,25 @@ class BaseModel(Base):
 
     def __repr__(self) -> str:
         return f"<{type(self).__name__} id={self.id}>"
+
+
+class TenantScopedModel(BaseModel):
+    """Every table owned by a tenant inherits this.
+
+    Declaring ``tenant_id`` once — rather than on each model — is what lets
+    :class:`~src.shared.database.repository.TenantScopedRepository` guarantee at the type level that
+    a scoped query is possible. Tenant isolation is the project's worst failure mode (spec §5.7), so
+    it is structural, not a convention each module has to remember.
+    """
+
+    __abstract__ = True
+
+    @declared_attr
+    @classmethod
+    def tenant_id(cls) -> Mapped[uuid.UUID]:
+        return mapped_column(
+            Uuid(as_uuid=True),
+            ForeignKey("tenant.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
