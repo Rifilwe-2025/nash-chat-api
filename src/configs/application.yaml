@@ -15,6 +15,7 @@ server:
 
 database:
   url: "${DATABASE_URL:postgresql+asyncpg://postgres:qwerty@localhost:5432/nashdb} | str"
+  test_url: "${DATABASE_TEST_URL:postgresql+asyncpg://postgres:qwerty@localhost:5432/nashdb_test} | str"
   echo: "${DATABASE_ECHO:false} | bool"
   pool_size: "${DATABASE_POOL_SIZE:10} | int"
   max_overflow: "${DATABASE_MAX_OVERFLOW:5} | int"
