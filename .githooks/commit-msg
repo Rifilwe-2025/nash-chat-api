@@ -1,0 +1,47 @@
+#!/usr/bin/env sh
+# Enforces the commit message shape from .docs/git/GIT_CONVENTIONS.md:
+#
+#   type(scope): short summary of what was done
+#   - path/to/file: what changed in this file
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+
+msg_file="$1"
+
+# Ignore comment lines and everything from the scissors line down.
+body=$(sed -e '/^# ------------------------ >8 ------------------------$/,$d' -e '/^#/d' "$msg_file")
+
+subject=$(printf '%s\n' "$body" | sed -n '1p')
+
+# Merge and revert commits are exempt.
+case "$subject" in
+  "Merge "*|"Revert "*) exit 0 ;;
+esac
+
+fail() {
+  printf 'commit-msg: %s\n\n' "$1" >&2
+  printf 'Required shape (.docs/git/GIT_CONVENTIONS.md):\n\n' >&2
+  printf '  type(scope): short summary of what was done\n' >&2
+  printf '  - path/to/file: what changed in this file\n\n' >&2
+  printf 'Your subject was: %s\n' "$subject" >&2
+  exit 1
+}
+
+if ! printf '%s' "$subject" | grep -Eq '^(feat|fix|refactor|chore|style|docs|test|perf|build|ci)\([a-z0-9._/-]+\): .+'; then
+  fail "subject must be 'type(scope): summary' using a conventional-commit type"
+fi
+
+if [ "$(printf '%s' "$subject" | wc -c)" -gt 100 ]; then
+  fail "subject is longer than 100 characters"
+fi
+
+bullets=$(printf '%s\n' "$body" | grep -c '^- ')
+if [ "$bullets" -eq 0 ]; then
+  fail "body needs one '- file: what changed' bullet per file in the commit"
+fi
+
+if printf '%s\n' "$body" | grep -Eqi 'co-authored-by:.*(claude|anthropic)|generated with .*claude|claude-session:'; then
+  fail "no Claude/Anthropic attribution or co-author trailers (.docs/git/GIT_CONVENTIONS.md)"
+fi
+
+exit 0
