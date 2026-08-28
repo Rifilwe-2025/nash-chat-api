@@ -15,6 +15,8 @@ import openai
 
 from src import configs
 from src.shared.llm.base import (
+    AttachmentKind,
+    ChatMessage,
     CompletionRequest,
     CompletionResult,
     LLMProvider,
@@ -32,6 +34,29 @@ from src.shared.llm.errors import (
 )
 
 DEFAULT_MODEL = "gpt-4o"
+
+
+def _content(message: ChatMessage) -> Any:
+    """Images ride as a data-URI ``image_url``; anything else as an inline ``file`` part."""
+    if not message.attachments:
+        return message.content
+
+    parts: list[dict[str, Any]] = []
+    for attachment in message.attachments:
+        if attachment.kind is AttachmentKind.IMAGE:
+            parts.append({"type": "image_url", "image_url": {"url": attachment.data_uri}})
+        else:
+            parts.append(
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": attachment.filename or "attachment",
+                        "file_data": attachment.data_uri,
+                    },
+                }
+            )
+    parts.append({"type": "text", "text": message.content})
+    return parts
 
 
 @contextmanager
@@ -77,7 +102,8 @@ class OpenAIProvider(LLMProvider):
         if request.system:
             messages.append({"role": "system", "content": request.system})
         messages.extend(
-            {"role": message.role.value, "content": message.content} for message in request.messages
+            {"role": message.role.value, "content": _content(message)}
+            for message in request.messages
         )
 
         payload: dict[str, Any] = {

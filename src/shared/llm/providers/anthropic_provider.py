@@ -19,6 +19,7 @@ import anthropic
 
 from src import configs
 from src.shared.llm.base import (
+    ChatMessage,
     CompletionRequest,
     CompletionResult,
     LLMProvider,
@@ -45,6 +46,27 @@ SAMPLING_CAPABLE_PREFIXES = ("claude-haiku-4-5", "claude-sonnet-4-5", "claude-3"
 
 def accepts_temperature(model: str) -> bool:
     return model.startswith(SAMPLING_CAPABLE_PREFIXES)
+
+
+def _content(message: ChatMessage) -> Any:
+    """A plain string when there is nothing attached, so ordinary turns keep the simple shape."""
+    if not message.attachments:
+        return message.content
+
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": attachment.kind.value,
+            "source": {
+                "type": "base64",
+                "media_type": attachment.media_type,
+                "data": attachment.base64_data,
+            },
+        }
+        for attachment in message.attachments
+    ]
+    # The instruction goes last: Claude reads the files first and then the ask about them.
+    blocks.append({"type": "text", "text": message.content})
+    return blocks
 
 
 @contextmanager
@@ -94,7 +116,7 @@ class AnthropicProvider(LLMProvider):
             "model": model,
             "max_tokens": request.max_tokens,
             "messages": [
-                {"role": message.role.value, "content": message.content}
+                {"role": message.role.value, "content": _content(message)}
                 for message in request.messages
             ],
         }

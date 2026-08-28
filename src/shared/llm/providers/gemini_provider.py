@@ -16,6 +16,7 @@ from google.genai import errors as genai_errors
 
 from src import configs
 from src.shared.llm.base import (
+    ChatMessage,
     CompletionRequest,
     CompletionResult,
     LLMProvider,
@@ -36,6 +37,20 @@ DEFAULT_MODEL = "gemini-2.0-flash"
 
 # Gemini calls the assistant "model".
 _ROLE_MAP = {Role.USER: "user", Role.ASSISTANT: "model"}
+
+
+def _parts(message: ChatMessage) -> list[dict[str, Any]]:
+    """Attachments become ``inline_data`` parts, images and PDFs alike.
+
+    The bytes are passed through raw rather than base64-encoded: the SDK encodes ``Blob.data``
+    itself, and handing it an already-encoded string would double-encode the file.
+    """
+    parts: list[dict[str, Any]] = [
+        {"inline_data": {"mime_type": attachment.media_type, "data": attachment.data}}
+        for attachment in message.attachments
+    ]
+    parts.append({"text": message.content})
+    return parts
 
 
 @contextmanager
@@ -69,7 +84,7 @@ class GeminiProvider(LLMProvider):
 
     def _contents(self, request: CompletionRequest) -> list[dict[str, Any]]:
         return [
-            {"role": _ROLE_MAP[message.role], "parts": [{"text": message.content}]}
+            {"role": _ROLE_MAP[message.role], "parts": _parts(message)}
             for message in request.messages
         ]
 
