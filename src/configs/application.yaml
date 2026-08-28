@@ -22,6 +22,12 @@ database:
 redis:
   url: "${REDIS_URL:redis://localhost:6379/0} | str"
 
+docs:
+  enabled: "${DOCS_ENABLED:true} | bool"
+  swagger_path: "${DOCS_SWAGGER_PATH:/docs} | str"
+  redoc_path: "${DOCS_REDOC_PATH:/redoc} | str"
+  openapi_path: "${DOCS_OPENAPI_PATH:/openapi.json} | str"
+
 logging:
   level: "${LOG_LEVEL:INFO} | str"
 

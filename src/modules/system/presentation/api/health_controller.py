@@ -18,6 +18,15 @@ def get_system_service() -> SystemService:
 SystemServiceDep = Annotated[SystemService, Depends(get_system_service)]
 
 
-@router.get("/health", response_model=ApiResponse[HealthResponse])
+@router.get(
+    "/health",
+    response_model=ApiResponse[HealthResponse],
+    summary="Service health",
+    description=(
+        "Reports that the service is running, along with its name, version and environment. "
+        "Use this for liveness checks; readiness probes arrive with the database layer."
+    ),
+    responses={200: {"description": "The service is up."}},
+)
 def health(service: SystemServiceDep) -> ApiResponse[HealthResponse]:
     return ApiResponse.ok(service.health())
