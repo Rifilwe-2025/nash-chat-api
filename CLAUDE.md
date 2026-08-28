@@ -213,7 +213,7 @@ Then move to the next phase from a fresh `main`.
 - **Self-review every PR before asking for a merge**: read `gh pr diff` end to end and check it
   against the phase's "Done when" bar, the spec sections it cites, and the three invariants above.
   State in the PR body what you verified and what you did not.
-- The maintainer (`@kudzaiprichard`) is the code owner and must approve. GitHub forbids self-approval,
+- The maintainer (`@Rifilwe-2025`) is the code owner and must approve. GitHub forbids self-approval,
   so the maintainer's own PRs merge via the admin bypass ("Merge without waiting for requirements") —
   that is the maintainer's call to make, not something to do unasked.
 - **Only commit, push, open PRs, or merge when the maintainer asks.** Building a phase locally does
