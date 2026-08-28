@@ -137,8 +137,22 @@ async def client(connection: AsyncConnection, engine: AsyncEngine) -> AsyncItera
     app.state.session_factory = factory
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
-        async with factory() as db_session:
+        """Mirror the real dependency, including the commit.
+
+        Without committing, everything a request writes is discarded when its session closes, and a
+        second request cannot see the first one's rows. The commit only releases a savepoint inside
+        the test's outer transaction, which is still rolled back afterwards, so isolation holds.
+        """
+        db_session = factory()
+        try:
             yield db_session
+        except Exception:
+            await db_session.rollback()
+            raise
+        else:
+            await db_session.commit()
+        finally:
+            await db_session.close()
 
     app.dependency_overrides[get_session] = override_get_session
 

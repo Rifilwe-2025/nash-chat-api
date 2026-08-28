@@ -20,7 +20,22 @@ async def test_openapi_schema_carries_metadata(client: AsyncClient) -> None:
     assert schema["info"]["title"]
     assert schema["info"]["version"]
     assert schema["info"]["description"]
-    assert {tag["name"] for tag in schema["tags"]} == {"system"}
+    assert {"system", "auth", "account"} <= {tag["name"] for tag in schema["tags"]}
+
+
+async def test_every_tag_in_use_is_described(client: AsyncClient) -> None:
+    """A tag on a route with no TAGS_METADATA entry renders as a bare heading in Swagger."""
+    schema = (await client.get("/openapi.json")).json()
+
+    described = {tag["name"] for tag in schema["tags"]}
+    used = {
+        tag
+        for operations in schema["paths"].values()
+        for operation in operations.values()
+        for tag in operation.get("tags", [])
+    }
+
+    assert used - described == set()
 
 
 async def test_every_route_is_documented(client: AsyncClient) -> None:
