@@ -40,9 +40,15 @@ def page_params(
     page: Annotated[int, Query(ge=1, description="1-indexed page number.")] = 1,
     page_size: Annotated[
         int,
-        Query(ge=1, le=MAX_PAGE_SIZE, description=f"Rows per page (max {MAX_PAGE_SIZE})."),
+        Query(
+            alias="pageSize",
+            ge=1,
+            le=MAX_PAGE_SIZE,
+            description=f"Rows per page (max {MAX_PAGE_SIZE}).",
+        ),
     ] = 20,
 ) -> PageRequest:
+    """Query parameters are camelCase, matching the JSON bodies."""
     return PageRequest(page=page, page_size=page_size)
 
 

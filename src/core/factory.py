@@ -15,6 +15,7 @@ from src import configs
 from src.core.lifespan import lifespan
 from src.core.middleware import RequestContextMiddleware
 from src.core.openapi import API_DESCRIPTION, TAGS_METADATA
+from src.modules.agents.presentation.api import router as agents_router
 from src.modules.auth.presentation.api import router as auth_router
 from src.modules.system.presentation.api import router as system_router
 from src.modules.tenants.presentation.api import router as account_router
@@ -61,5 +62,6 @@ def create_app() -> FastAPI:
     app.include_router(system_router)
     app.include_router(auth_router)
     app.include_router(account_router)
+    app.include_router(agents_router)
 
     return app

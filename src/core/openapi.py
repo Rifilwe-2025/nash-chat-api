@@ -40,6 +40,14 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "agents",
+        "description": (
+            "Create and configure chat agents: persona, engagement rules, guardrails, and which "
+            "LLM runs them. Agents start as drafts and must be published before they serve "
+            "traffic. Every configuration change is versioned and can be rolled back."
+        ),
+    },
+    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "
