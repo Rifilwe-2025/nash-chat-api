@@ -266,6 +266,37 @@ class KnowledgeBaseService:
             configured = RetrievalTier.AUTO
         return [knowledge_base.id for knowledge_base in attached], configured
 
+    # -- extraction as a service (used by other modules) ---------------------
+
+    async def extract_text(
+        self, filename: str | None, data: bytes, declared_media_type: str | None = None
+    ) -> str:
+        """Read submitted bytes as plain text, without storing anything.
+
+        The seam other modules reach extraction through. Phase 10's WhatsApp channel needs it: a
+        contact photographs a paint chart and the agent has to answer about what is in the picture,
+        which is the same "turn these bytes into words" problem an upload solves — and solving it
+        twice would mean two answers to "can we read a .docx?".
+
+        A *service* method rather than an import of ``knowledge_base.internal.extractors``, because
+        ``internal/`` is module-private and cross-module access is service to service. It writes no
+        rows and counts against no quota: nothing is being kept, so there is nothing to store or
+        bill for.
+
+        Raises :class:`ValidationException` for a format v1 cannot read, which the caller turns into
+        something the contact can act on rather than a stack trace.
+        """
+        media_type = self._resolve_media_type(filename, declared_media_type)
+        try:
+            result = await self._extract(
+                ExtractedContent(data=data, media_type=media_type, filename=filename)
+            )
+        except ExtractionError as exc:
+            raise ValidationException(
+                str(exc), code="KB_EXTRACTION_FAILED", message="That file could not be read."
+            ) from exc
+        return result.text
+
     # -- sources -------------------------------------------------------------
 
     async def get_source(self, kb_id: uuid.UUID, source_id: uuid.UUID) -> KbSource:
