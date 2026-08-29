@@ -10,6 +10,7 @@ from src.modules.knowledge_base.domain.services import KnowledgeBaseService
 from src.modules.knowledge_base.internal import limits
 from src.modules.knowledge_base.internal.retrieval import RetrievalResult, TierDecision
 from src.modules.knowledge_base.presentation.dtos.knowledge_base import (
+    AddApiSourceRequest,
     AddManualSourceRequest,
     AddUrlSourceRequest,
     AttachedAgentsResponse,
@@ -23,6 +24,7 @@ from src.modules.knowledge_base.presentation.dtos.knowledge_base import (
     SourceResponse,
     SourceSummaryResponse,
     StorageUsageResponse,
+    SyncScheduleRequest,
     UpdateKnowledgeBaseRequest,
 )
 from src.modules.tenants.presentation.dependencies import CurrentTenantDep
@@ -100,6 +102,9 @@ def _summary(knowledge_base: KnowledgeBase) -> KnowledgeBaseSummaryResponse:
 
 def _source_summary(source: KbSource) -> SourceSummaryResponse:
     return SourceSummaryResponse(
+        sync_interval_minutes=source.sync_interval_minutes,
+        next_sync_at=source.next_sync_at,
+        consecutive_failures=source.consecutive_failures,
         id=source.id,
         kb_id=source.kb_id,
         name=source.name,
@@ -460,6 +465,112 @@ async def add_manual_source(
 ) -> ApiResponse[SourceResponse]:
     source = await service.add_manual_source(kb_id, title=payload.title, body=payload.body)
     return ApiResponse.ok(_source(source), message="Source added.")
+
+
+@router.post(
+    "/{kb_id}/sources/api",
+    response_model=ApiResponse[SourceResponse],
+    status_code=201,
+    summary="Add an API as a source",
+    description=(
+        "Connects a JSON endpoint — a product catalogue, a CMS, a help-desk article list — "
+        "and indexes what it returns. This is **Pattern B**: records are pulled on a schedule "
+        "and stored, so answers come from the last sync rather than from a live call.\n\n"
+        "`contentFields` decides what becomes knowledge. Those fields are turned into "
+        "sentences rather than injected as raw JSON, for the same reason CSV rows are — a "
+        "raw record reads as noise in a prompt where a sentence reads as information.\n\n"
+        "The first pull happens immediately, so you find out now whether the endpoint and "
+        "credentials work. After that `syncIntervalMinutes` governs re-pulls, and supplying a "
+        "`versionField` lets an unchanged record be skipped instead of re-indexed."
+    ),
+    responses={
+        201: {"description": "The source was created and its first pull started."},
+        401: UNAUTHORIZED,
+        404: NOT_FOUND,
+        422: {
+            "description": (
+                "The payload failed validation, or the interval is below the permitted floor "
+                "(`KB_SYNC_INTERVAL_TOO_SHORT`)."
+            )
+        },
+    },
+)
+async def add_api_source(
+    kb_id: KbIdPath, payload: AddApiSourceRequest, service: KbServiceDep
+) -> ApiResponse[SourceResponse]:
+    source = await service.add_api_source(
+        kb_id,
+        name=payload.name,
+        connector={
+            "url": payload.url,
+            "contentFields": payload.content_fields,
+            "metadataFields": payload.metadata_fields,
+            "idField": payload.id_field,
+            "versionField": payload.version_field,
+            "recordsPath": payload.records_path,
+            "pagination": payload.pagination.value,
+            "pageSize": payload.page_size,
+            "authType": payload.auth_type.value,
+            "credentials": payload.credentials,
+        },
+        sync_interval_minutes=payload.sync_interval_minutes,
+    )
+    return ApiResponse.ok(_source(source), message="Source added.")
+
+
+@router.post(
+    "/{kb_id}/sources/{source_id}/sync",
+    response_model=ApiResponse[SourceResponse],
+    summary="Re-sync a source now",
+    description=(
+        "Re-reads a URL or API source immediately, without waiting for its schedule. Use it "
+        "after fixing credentials, or when you know the far end has changed.\n\n"
+        "Files and FAQ entries cannot be re-synced — they have no origin to re-read. Upload "
+        "the file again instead."
+    ),
+    responses={
+        200: {"description": "The re-sync ran, or was queued. Check `status` for the result."},
+        401: UNAUTHORIZED,
+        404: SOURCE_NOT_FOUND,
+        422: {"description": "This kind of source cannot be re-synced (`KB_SOURCE_NOT_SYNCABLE`)."},
+    },
+)
+async def sync_source_now(
+    kb_id: KbIdPath, source_id: SourceIdPath, service: KbServiceDep
+) -> ApiResponse[SourceResponse]:
+    return ApiResponse.ok(_source(await service.sync_now(kb_id, source_id)))
+
+
+@router.put(
+    "/{kb_id}/sources/{source_id}/schedule",
+    response_model=ApiResponse[SourceResponse],
+    summary="Set a source's sync schedule",
+    description=(
+        "Sets how often a URL or API source is re-read automatically. `0` stops scheduled "
+        "syncs and leaves manual re-sync available.\n\n"
+        "Intervals below the configured floor are rejected: a very frequent sync is a good "
+        "way to get rate limited by the API you are pulling from."
+    ),
+    responses={
+        200: {"description": "The schedule was updated."},
+        401: UNAUTHORIZED,
+        404: SOURCE_NOT_FOUND,
+        422: {
+            "description": (
+                "The source cannot be scheduled (`KB_SOURCE_NOT_SYNCABLE`) or the interval "
+                "is too short (`KB_SYNC_INTERVAL_TOO_SHORT`)."
+            )
+        },
+    },
+)
+async def set_sync_schedule(
+    kb_id: KbIdPath,
+    source_id: SourceIdPath,
+    payload: SyncScheduleRequest,
+    service: KbServiceDep,
+) -> ApiResponse[SourceResponse]:
+    source = await service.set_sync_schedule(kb_id, source_id, payload.sync_interval_minutes)
+    return ApiResponse.ok(_source(source))
 
 
 @router.get(
