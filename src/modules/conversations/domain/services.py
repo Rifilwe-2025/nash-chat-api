@@ -41,7 +41,7 @@ from src.modules.conversations.domain.repositories import (
     ConversationRepository,
     MessageRepository,
 )
-from src.modules.conversations.internal import guardrails
+from src.modules.conversations.internal import guardrails, tool_loop
 from src.modules.conversations.internal.history.summarisation import summarise
 from src.modules.conversations.internal.history.trimming import (
     HistoryTurn,
@@ -53,9 +53,17 @@ from src.modules.conversations.internal.prompt.assembly import AgentPrompt, buil
 from src.modules.conversations.internal.prompt.delimiters import fence_user_message
 from src.modules.knowledge_base.domain.services import KnowledgeBaseService
 from src.modules.knowledge_base.internal.retrieval import RetrievalResult
+from src.modules.tools.domain.services import ResponseCache, ToolResult, ToolService
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import ConflictException, NotFoundException, ValidationException
-from src.shared.llm import ChatMessage, CompletionRequest, LLMClient, LLMError, Role
+from src.shared.llm import (
+    ChatMessage,
+    CompletionRequest,
+    CompletionResult,
+    LLMClient,
+    LLMError,
+    Role,
+)
 from src.shared.llm.context import context_characters
 from src.shared.llm.pricing import cost_micro_usd
 
@@ -75,12 +83,16 @@ class TurnResult:
         reply: Message,
         retrieval: RetrievalResult | None,
         escalated: bool = False,
+        tool_calls: list[ToolResult] | None = None,
     ) -> None:
         self.conversation = conversation
         self.user_message = user_message
         self.reply = reply
         self.retrieval = retrieval
         self.escalated = escalated
+        # What the turn looked up, if anything. Channels do not use it yet; the conversation API
+        # surfaces it so a tenant can see which answers came from a live call.
+        self.tool_calls = tool_calls or []
 
 
 class ConversationService:
@@ -89,6 +101,7 @@ class ConversationService:
         session: AsyncSession,
         tenant_id: uuid.UUID,
         llm_client: LLMClient | None = None,
+        tool_cache: ResponseCache | None = None,
     ) -> None:
         self.session = session
         self.tenant_id = tenant_id
@@ -96,6 +109,9 @@ class ConversationService:
         self.messages = MessageRepository(session)
         self.agents = AgentService(session, tenant_id)
         self.knowledge = KnowledgeBaseService(session, tenant_id)
+        # Service to service, like knowledge: the turn asks the tools module what this agent may
+        # call and to run one, and never touches a tool row or the HTTP client itself.
+        self.tools = ToolService(session, tenant_id, cache=tool_cache)
         self._llm = llm_client or LLMClient()
 
     # -- reads ---------------------------------------------------------------
@@ -219,7 +235,7 @@ class ConversationService:
         conversation = await self._session_for(agent, channel, external_user_id, None)
         await lock_conversation(self.session, conversation.id)
 
-        await self._store(conversation, MessageRole.USER, message)
+        user_message = await self._store(conversation, MessageRole.USER, message)
 
         decision = guardrails.evaluate(
             message,
@@ -246,6 +262,17 @@ class ConversationService:
         request, provider, retrieval, history_turns = await self._prepare(
             agent, conversation, message
         )
+
+        if request.tools:
+            # A stream cannot pause mid-token to make an HTTP call and resume, so an agent with
+            # tools takes the buffered path and its finished answer is delivered as one chunk —
+            # exactly what a guardrail reply already does above. The caller cannot tell the
+            # difference, and the alternative is worse either way: offering tools to a streaming
+            # call means a stream that ends with no text when the model chooses one, and dropping
+            # the tools means a published agent that silently loses its lookups on the widget.
+            result = await self._answer(agent, conversation, user_message, message)
+            return conversation, _single_chunk(result.reply.content)
+
         return conversation, self._stream_and_store(
             conversation, provider, request, retrieval, history_turns
         )
@@ -313,6 +340,10 @@ class ConversationService:
         provider = agent.model_provider.value if agent.model_provider else ""
 
         retrieval = await self.knowledge.retrieve(message, agent_id=agent.id, model=model)
+        # An agent with no tools gets an empty list, and everything downstream — the prompt note,
+        # the loop, the follow-up call — is skipped. A KB-only agent costs exactly what it did
+        # before this phase.
+        tools = await self.tools.definitions_for(agent.id)
 
         system_prompt = build_system_prompt(
             self._agent_prompt(agent),
@@ -321,6 +352,7 @@ class ConversationService:
             ],
             has_context=retrieval.has_context,
             history_summary=conversation.summary,
+            has_tools=bool(tools),
         )
 
         turns = await self._history_for_prompt(conversation, system_prompt, agent, model)
@@ -334,6 +366,7 @@ class ConversationService:
             system=system_prompt,
             max_tokens=int(agent.model_config_json.get("max_tokens") or DEFAULT_MAX_TOKENS),
             temperature=float(agent.model_config_json.get("temperature", DEFAULT_TEMPERATURE)),
+            tools=tools,
         )
         return request, provider, retrieval, len(turns)
 
@@ -360,6 +393,7 @@ class ConversationService:
 
         try:
             result = await self._llm.complete(provider, request)
+            outcome = await self._resolve_tools(agent, conversation, provider, request, result)
         except LLMError as exc:
             logger.warning("provider call failed for agent %s: %s", agent.id, exc)
             raise ConflictException(
@@ -368,22 +402,64 @@ class ConversationService:
                 message="The agent is temporarily unavailable.",
             ) from exc
 
+        result = outcome.result
+        meta: dict[str, Any] = {
+            "tier": retrieval.tier.value,
+            "hasContext": retrieval.has_context,
+            "historyTurns": history_turns,
+        }
+        if outcome.used_tools:
+            meta["toolCalls"] = outcome.summary()
+            meta["toolRounds"] = outcome.rounds
+
         reply = await self._store(
             conversation,
             MessageRole.ASSISTANT,
             result.content.strip(),
             provider=result.provider,
             model=result.model,
-            prompt_tokens=result.usage.prompt_tokens,
-            completion_tokens=result.usage.completion_tokens,
+            # The whole turn's usage, summed across every provider call the tool loop made —
+            # not just the final one. A tool-using turn calls the model at least twice and the
+            # tenant pays for both.
+            prompt_tokens=outcome.usage.prompt_tokens,
+            completion_tokens=outcome.usage.completion_tokens,
             citations=self._citations(retrieval),
-            meta={
-                "tier": retrieval.tier.value,
-                "hasContext": retrieval.has_context,
-                "historyTurns": history_turns,
-            },
+            meta=meta,
         )
-        return TurnResult(conversation, user_message, reply, retrieval=retrieval)
+        return TurnResult(
+            conversation, user_message, reply, retrieval=retrieval, tool_calls=outcome.calls
+        )
+
+    async def _resolve_tools(
+        self,
+        agent: Agent,
+        conversation: Conversation,
+        provider: str,
+        request: CompletionRequest,
+        first: CompletionResult,
+    ) -> tool_loop.ToolLoopOutcome:
+        """Run whatever the model asked for, and get its final answer.
+
+        Returns immediately when nothing was asked for, which is the common case and must stay
+        free. The loop itself is in ``internal/tool_loop.py``; this is the seam that knows the
+        agent, the conversation and the budget.
+        """
+        if not first.tool_calls:
+            # `usage` is carried explicitly. An outcome built without it reports zero tokens, which
+            # would silently zero the accounting on every turn that used no tool — that is, almost
+            # all of them.
+            return tool_loop.ToolLoopOutcome(result=first, usage=first.usage)
+
+        return await tool_loop.run(
+            self._llm,
+            provider,
+            request,
+            first,
+            tools=self.tools,
+            agent_id=agent.id,
+            conversation_id=conversation.id,
+            max_calls=await self.tools.max_calls_per_turn(agent.id),
+        )
 
     async def _history_for_prompt(
         self,
