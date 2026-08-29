@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import Field, field_validator
 
 from src.modules.knowledge_base.domain.models import RetrievalTier, SourceStatus, SourceType
+from src.modules.knowledge_base.internal.connectors import AuthType, PaginationStyle
 from src.modules.knowledge_base.internal.retrieval import NoContextReason
 from src.shared.responses import CamelModel
 
@@ -93,6 +94,83 @@ class AddManualSourceRequest(CamelModel):
     )
 
 
+class AddApiSourceRequest(CamelModel):
+    """A Pattern B connector: an API pulled on a schedule and indexed (spec §5.2.1)."""
+
+    name: str = Field(
+        min_length=1,
+        max_length=500,
+        description="Label for the source.",
+        examples=["Product catalogue"],
+    )
+    url: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="The JSON endpoint to pull. Must be publicly reachable.",
+        examples=["https://shop.example.com/api/products"],
+    )
+    content_fields: list[str] = Field(
+        min_length=1,
+        description=(
+            "Which fields become the indexed text, in order. Dotted paths reach into nested "
+            "records. These are turned into sentences rather than injected as raw JSON."
+        ),
+        examples=[["sku", "name", "description", "price"]],
+    )
+    metadata_fields: list[str] = Field(
+        default_factory=list,
+        description="Fields kept for citation and filtering but left out of the prompt.",
+        examples=[["category", "updated_at"]],
+    )
+    id_field: str = Field(
+        default="id", max_length=200, description="Field identifying each record."
+    )
+    version_field: str | None = Field(
+        default=None,
+        max_length=200,
+        description=(
+            "Field carrying the record's version or last-modified time. Supply it and an "
+            "unchanged record is skipped on re-sync; without it a content hash is used instead."
+        ),
+        examples=["updated_at"],
+    )
+    records_path: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Where the record list sits in the response. Omit if the body is the list.",
+        examples=["data.items"],
+    )
+    pagination: PaginationStyle = Field(
+        default=PaginationStyle.NONE, description="How to walk past the first page."
+    )
+    page_size: int | None = Field(default=None, ge=1, le=1000)
+    auth_type: AuthType = Field(default=AuthType.NONE, description="How to authenticate.")
+    credentials: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Auth values for the chosen type — `token` for bearer, `header`/`value` for an API "
+            "key, `username`/`password` for basic. Stored server-side and never returned."
+        ),
+    )
+    sync_interval_minutes: int | None = Field(
+        default=None,
+        ge=0,
+        description=(
+            "How often to re-pull, in minutes. 0 never re-syncs. Below the configured floor is "
+            "rejected — a too-frequent sync gets you rate limited by your own supplier."
+        ),
+        examples=[60],
+    )
+
+
+class SyncScheduleRequest(CamelModel):
+    sync_interval_minutes: int = Field(
+        ge=0,
+        description="Minutes between automatic re-syncs. 0 stops scheduling.",
+        examples=[1440],
+    )
+
+
 class KnowledgeBaseResponse(CamelModel):
     id: uuid.UUID
     tenant_id: uuid.UUID
@@ -141,6 +219,19 @@ class SourceSummaryResponse(CamelModel):
     )
     source_updated_at: datetime | None = Field(
         default=None, description="When the underlying content last changed."
+    )
+    sync_interval_minutes: int = Field(
+        description="Minutes between automatic re-syncs. 0 means it is never re-synced.",
+        examples=[60],
+    )
+    next_sync_at: datetime | None = Field(
+        default=None, description="When the next automatic sync is due."
+    )
+    consecutive_failures: int = Field(
+        description=(
+            "Failed syncs in a row. A rising count usually means expired credentials or a changed "
+            "response shape."
+        )
     )
     created_at: datetime
 
