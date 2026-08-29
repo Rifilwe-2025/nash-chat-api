@@ -93,6 +93,17 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "whatsapp",
+        "description": (
+            "Connecting an agent to a WhatsApp Business number, and everything that flows over it. "
+            "Save your Meta credentials, paste the callback URL and verify token the connect "
+            "endpoint gives you into your Meta app, and inbound customer messages reach the agent "
+            "with no further wiring. Free-form replies are governed by WhatsApp's 24-hour customer "
+            "service window; outside it only a pre-approved template is delivered, and the "
+            "connection nominates which one. The webhook routes are called by Meta, not by you."
+        ),
+    },
+    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "
