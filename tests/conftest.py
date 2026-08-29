@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
 from pathlib import Path
 from typing import Any
 
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import make_url, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
@@ -66,6 +67,25 @@ def _alembic_config(url: str) -> Config:
     config.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
     config.set_main_option("sqlalchemy.url", url)
     return config
+
+
+@pytest.fixture
+def config_override(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[..., None]]:
+    """Temporarily change configuration the way a deployment would — through the environment.
+
+    Reaching into the loaded dictionary would test a different code path from the one production
+    uses; setting the variable and reloading exercises the real resolution, including the cast.
+    """
+
+    def override(**values: Any) -> None:
+        for key, value in values.items():
+            monkeypatch.setenv(key, str(value))
+        configs.reload()
+
+    yield override
+
+    monkeypatch.undo()
+    configs.reload()
 
 
 @pytest.fixture(scope="session")
@@ -123,10 +143,14 @@ async def session(connection: AsyncConnection) -> AsyncIterator[AsyncSession]:
 
 
 @pytest.fixture
-async def client(connection: AsyncConnection, engine: AsyncEngine) -> AsyncIterator[AsyncClient]:
-    """App client whose request sessions join the test transaction, so requests roll back too."""
-    app = create_app()
-    app.state.engine = engine
+async def app(connection: AsyncConnection, engine: AsyncEngine) -> AsyncIterator[FastAPI]:
+    """The application, wired to the test transaction.
+
+    Separate from ``client`` so a test can override a dependency — the conversation engine takes a
+    provider client, and no test should be reaching a real one.
+    """
+    application = create_app()
+    application.state.engine = engine
 
     factory = async_sessionmaker(
         bind=connection,
@@ -134,7 +158,7 @@ async def client(connection: AsyncConnection, engine: AsyncEngine) -> AsyncItera
         autoflush=False,
         join_transaction_mode="create_savepoint",
     )
-    app.state.session_factory = factory
+    application.state.session_factory = factory
 
     async def override_get_session() -> AsyncIterator[AsyncSession]:
         """Mirror the real dependency, including the commit.
@@ -154,13 +178,19 @@ async def client(connection: AsyncConnection, engine: AsyncEngine) -> AsyncItera
         finally:
             await db_session.close()
 
-    app.dependency_overrides[get_session] = override_get_session
+    application.dependency_overrides[get_session] = override_get_session
+    try:
+        yield application
+    finally:
+        application.dependency_overrides.clear()
 
+
+@pytest.fixture
+async def client(app: FastAPI) -> AsyncIterator[AsyncClient]:
+    """HTTP client bound to the test application."""
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as async_client:
         yield async_client
-
-    app.dependency_overrides.clear()
 
 
 @pytest.fixture
