@@ -22,6 +22,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src import configs
 from src.modules.agents.domain.services import AgentService
 from src.modules.knowledge_base.domain.models import (
     AgentKbLink,
@@ -46,6 +47,14 @@ from src.modules.knowledge_base.internal.extractors import (
     media_type_for,
 )
 from src.modules.knowledge_base.internal.fetching import fetch
+from src.modules.knowledge_base.internal.retrieval import (
+    NoContextReason,
+    RetrievalResult,
+    TierDecision,
+    choose_tier,
+    retrieve_direct,
+    retrieve_keyword,
+)
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import ConflictException, NotFoundException, ValidationException
 
@@ -90,7 +99,7 @@ class KnowledgeBaseService:
         self,
         name: str,
         description: str = "",
-        retrieval_tier: RetrievalTier = RetrievalTier.DIRECT,
+        retrieval_tier: RetrievalTier = RetrievalTier.AUTO,
     ) -> KnowledgeBase:
         await self._require_unique_name(name)
         return await self.knowledge_bases.add(
@@ -155,6 +164,102 @@ class KnowledgeBaseService:
     async def attached_agent_ids(self, kb_id: uuid.UUID) -> list[uuid.UUID]:
         await self.get(kb_id)
         return await self.links.agent_ids_for_kb(kb_id)
+
+    # -- retrieval -----------------------------------------------------------
+
+    async def retrieve(
+        self,
+        query: str,
+        kb_id: uuid.UUID | None = None,
+        agent_id: uuid.UUID | None = None,
+        model: str | None = None,
+    ) -> RetrievalResult:
+        """The one way to get knowledge out of this module (spec §5.2.2).
+
+        Callers pass a question and either a knowledge base or an agent, and get passages back.
+        They never choose a tier, never see a ``tsquery``, and will not have to change when Tier 3
+        arrives in v2 — which is the point of routing here rather than at the call site.
+
+        Give ``agent_id`` to search everything that agent draws on: an agent may have several
+        knowledge bases attached, and its answer should be able to come from any of them.
+        """
+        kb_ids, configured = await self._retrieval_scope(kb_id, agent_id)
+        if not kb_ids:
+            return RetrievalResult(
+                tier=RetrievalTier.DIRECT,
+                no_context_reason=NoContextReason.EMPTY_KNOWLEDGE_BASE,
+            )
+
+        total = await self.sources.total_characters(kb_ids)
+        decision = choose_tier(configured, total, model=model)
+
+        if decision.tier is RetrievalTier.DIRECT:
+            return retrieve_direct(
+                await self.sources.ready_for_kbs(kb_ids),
+                considered_characters=decision.considered_characters,
+                budget_characters=decision.budget_characters,
+            )
+
+        matches = await self.sources.search(
+            kb_ids, query, limit=configs.KNOWLEDGE_BASE_KEYWORD_TOP_N
+        )
+        return retrieve_keyword(
+            matches,
+            min_rank=configs.KNOWLEDGE_BASE_KEYWORD_MIN_RANK,
+            considered_characters=decision.considered_characters,
+            budget_characters=decision.budget_characters,
+        )
+
+    async def explain_retrieval(
+        self,
+        query: str,
+        kb_id: uuid.UUID | None = None,
+        agent_id: uuid.UUID | None = None,
+        model: str | None = None,
+    ) -> tuple[TierDecision, RetrievalResult]:
+        """The same retrieval, plus why that tier was chosen — the debugging surface (§5.2).
+
+        Deliberately delegates to :meth:`retrieve` rather than reimplementing the routing, at the
+        cost of resolving the scope twice. An explain endpoint that could disagree with the real
+        retrieval would be worse than useless, and this is a debugging path, not a hot one.
+        """
+        kb_ids, configured = await self._retrieval_scope(kb_id, agent_id)
+        total = await self.sources.total_characters(kb_ids)
+        decision = choose_tier(configured, total, model=model)
+        return decision, await self.retrieve(query, kb_id=kb_id, agent_id=agent_id, model=model)
+
+    async def _retrieval_scope(
+        self, kb_id: uuid.UUID | None, agent_id: uuid.UUID | None
+    ) -> tuple[list[uuid.UUID], RetrievalTier]:
+        """Which knowledge bases to search, and the tier they are configured for.
+
+        Both paths go through a scoped read first, so a retrieval can only ever reach this tenant's
+        knowledge (spec §5.7).
+        """
+        if (kb_id is None) == (agent_id is None):
+            raise ValidationException(
+                "Provide exactly one of a knowledge base or an agent to retrieve from.",
+                code="KB_RETRIEVAL_SCOPE_REQUIRED",
+            )
+
+        if kb_id is not None:
+            knowledge_base = await self.get(kb_id)
+            return [knowledge_base.id], knowledge_base.retrieval_tier
+
+        assert agent_id is not None
+        await self.agents.get(agent_id)
+        attached = await self.knowledge_bases.all_for_agent(agent_id)
+        # An agent's knowledge bases may disagree about tier. The most restrictive setting wins:
+        # if any one of them is too large to inject, or is pinned to search, injecting the others
+        # whole alongside a search result would be a muddle.
+        tiers = {knowledge_base.retrieval_tier for knowledge_base in attached}
+        if RetrievalTier.KEYWORD in tiers:
+            configured = RetrievalTier.KEYWORD
+        elif tiers == {RetrievalTier.DIRECT}:
+            configured = RetrievalTier.DIRECT
+        else:
+            configured = RetrievalTier.AUTO
+        return [knowledge_base.id for knowledge_base in attached], configured
 
     # -- sources -------------------------------------------------------------
 
