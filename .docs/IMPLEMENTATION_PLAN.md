@@ -20,7 +20,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 2** — Auth & multi-tenant isolation · `feat/auth-and-tenancy`
 - [x] **Phase 3** — Agent CRUD, configuration & versioning · `feat/agent-crud`
 - [x] **Phase 4** — LLM provider abstraction · `feat/llm-provider-abstraction`
-- [ ] **Phase 5** — Knowledge base: model, sources & extraction · `feat/kb-ingestion`
+- [x] **Phase 5** — Knowledge base: model, sources & extraction · `feat/kb-ingestion`
 - [ ] **Phase 6** — Retrieval: Tier 1 injection + Tier 2 keyword search · `feat/kb-retrieval-tiers`
 - [ ] **Phase 7** — Conversation engine & prompt assembly · `feat/conversation-engine`
 - [ ] **Phase 8** — Web chat API, API keys & integration docs · `feat/web-channel-and-api-keys`
@@ -302,7 +302,7 @@ credentials in a manual smoke test — and token counts are recorded on every ca
 
 ## Phase 5 — Knowledge base: model, sources & extraction
 
-- [ ] **Complete** · **Branch:** `feat/kb-ingestion`
+- [x] **Complete** · **Branch:** `feat/kb-ingestion`
 **Depends on:** Phase 3
 
 **Delivers**

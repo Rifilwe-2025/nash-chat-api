@@ -48,6 +48,15 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "knowledge-bases",
+        "description": (
+            "Knowledge an agent answers from. A knowledge base holds sources — uploaded files, "
+            "web pages, and typed FAQ entries — and each source is stored as the plain text "
+            "extracted from it, which you can read back to see exactly what an agent will use. "
+            "One knowledge base can be attached to any number of agents."
+        ),
+    },
+    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "

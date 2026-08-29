@@ -15,6 +15,10 @@ redis==5.2.1
 slowapi==0.1.9
 httpx==0.28.1
 
+# Knowledge base extraction (spec §5.2.3). No PDF or OCR library: the model reads those natively.
+python-docx==1.1.2
+beautifulsoup4==4.12.3
+
 # LLM providers (spec §5.3) — each provider's official SDK, behind one internal interface
 anthropic==1.2.0
 openai==3.5.0
@@ -26,3 +30,4 @@ pytest-asyncio==0.25.0
 ruff==0.8.6
 mypy==1.14.1
 types-PyYAML==6.0.12.20241230
+types-beautifulsoup4==4.12.0.20250204

@@ -1,8 +1,10 @@
 from src.shared.llm.base import (
+    AttachmentKind,
     ChatMessage,
     CompletionRequest,
     CompletionResult,
     LLMProvider,
+    MediaAttachment,
     Role,
     TokenUsage,
     ToolCall,
@@ -21,6 +23,7 @@ from src.shared.llm.registry import PROVIDERS, LLMClient, get_provider
 
 __all__ = [
     "PROVIDERS",
+    "AttachmentKind",
     "ChatMessage",
     "CompletionRequest",
     "CompletionResult",
@@ -33,6 +36,7 @@ __all__ = [
     "LLMRateLimitError",
     "LLMTimeoutError",
     "LLMUnavailableError",
+    "MediaAttachment",
     "Role",
     "TokenUsage",
     "ToolCall",

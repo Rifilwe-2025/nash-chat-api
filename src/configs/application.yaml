@@ -36,6 +36,19 @@ llm:
   # Provider used when the configured one is rate limited or down. Empty disables fallback.
   fallback_provider: "${LLM_FALLBACK_PROVIDER:} | str"
 
+knowledge_base:
+  # Ingestion limits (spec §5.2). Bytes, checked before anything is extracted or stored.
+  max_source_bytes: "${KB_MAX_SOURCE_BYTES:10485760} | int"
+  max_tenant_bytes: "${KB_MAX_TENANT_BYTES:262144000} | int"
+  url_fetch_timeout_seconds: "${KB_URL_FETCH_TIMEOUT_SECONDS:20} | float"
+  # Allow fetching URLs that resolve to private or loopback addresses. Off outside local
+  # development: an attacker-supplied URL would otherwise reach services inside the network.
+  allow_private_urls: "${KB_ALLOW_PRIVATE_URLS:false} | bool"
+  # PDFs and images have no extraction library in v1 — the model reads them natively (§5.2.3).
+  extraction_provider: "${KB_EXTRACTION_PROVIDER:gemini} | str"
+  extraction_model: "${KB_EXTRACTION_MODEL:gemini-2.0-flash} | str"
+  extraction_max_tokens: "${KB_EXTRACTION_MAX_TOKENS:8192} | int"
+
 auth:
   # Override JWT_SECRET_KEY in every deployed environment — the default is for local use only.
   jwt_secret: "${JWT_SECRET_KEY:local-development-secret-change-me} | str"

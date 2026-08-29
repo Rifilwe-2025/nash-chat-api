@@ -11,6 +11,7 @@ in its own field), the adapter absorbs the difference rather than the caller.
 
 from __future__ import annotations
 
+import base64
 import enum
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Sequence
@@ -23,12 +24,47 @@ class Role(str, enum.Enum):
     ASSISTANT = "assistant"
 
 
+class AttachmentKind(str, enum.Enum):
+    """Whether a file rides as an image part or a document part.
+
+    The distinction is the providers': every one of them has a separate wire shape for pictures and
+    for PDFs, and sending a PDF through the image block is a 400 everywhere.
+    """
+
+    IMAGE = "image"
+    DOCUMENT = "document"
+
+
+@dataclass(frozen=True, slots=True)
+class MediaAttachment:
+    """A file handed to the model to read natively (spec §5.2.3).
+
+    v1 deliberately has no OCR or PDF-parsing library: PDFs and images are passed to the model,
+    which reads them directly. Held as raw bytes here — each adapter encodes them the way its own
+    API wants, so nothing outside ``src/shared/llm`` deals in base64.
+    """
+
+    data: bytes
+    media_type: str
+    kind: AttachmentKind = AttachmentKind.DOCUMENT
+    filename: str | None = None
+
+    @property
+    def base64_data(self) -> str:
+        return base64.b64encode(self.data).decode("ascii")
+
+    @property
+    def data_uri(self) -> str:
+        return f"data:{self.media_type};base64,{self.base64_data}"
+
+
 @dataclass(frozen=True, slots=True)
 class ChatMessage:
     """One conversational turn. The system prompt is passed separately, not as a message."""
 
     role: Role
     content: str
+    attachments: Sequence[MediaAttachment] = ()
 
 
 @dataclass(frozen=True, slots=True)
