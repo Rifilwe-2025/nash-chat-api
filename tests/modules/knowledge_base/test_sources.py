@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 
-from src.modules.knowledge_base.domain import services as kb_services
+from src.modules.knowledge_base.internal import tasks as kb_tasks
 from src.modules.knowledge_base.internal.fetching import FetchedPage
 from tests.modules.knowledge_base.helpers import (
     DOCX_MEDIA_TYPE,
@@ -218,12 +218,16 @@ PAGE += b"<main><h1>Returns</h1><p>Within 30 days.</p></main></body></html>"
 
 @pytest.fixture
 def fetched_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stand in for the network. The fetcher's own behaviour is covered in test_fetching.py."""
+    """Stand in for the network.
+
+    Patched on the task rather than the service: fetching a URL is the worker's job since Phase 9.
+    The fetcher's own behaviour is covered in test_fetching.py.
+    """
 
     async def fake_fetch(url: str, max_bytes: int, client: object | None = None) -> FetchedPage:
         return FetchedPage(url=url, body=PAGE, media_type="text/html")
 
-    monkeypatch.setattr(kb_services, "fetch", fake_fetch)
+    monkeypatch.setattr(kb_tasks, "fetch", fake_fetch)
 
 
 async def test_a_url_source_stores_the_pages_readable_text(
@@ -257,7 +261,7 @@ async def test_a_url_serving_an_unsupported_type_becomes_a_failed_source(
     async def serves_a_zip(url: str, max_bytes: int, client: object | None = None) -> FetchedPage:
         return FetchedPage(url=url, body=b"PK", media_type="application/zip")
 
-    monkeypatch.setattr(kb_services, "fetch", serves_a_zip)
+    monkeypatch.setattr(kb_tasks, "fetch", serves_a_zip)
     auth = await headers(client)
     knowledge_base = await create_kb(client, auth)
 
