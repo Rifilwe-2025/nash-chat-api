@@ -24,7 +24,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 6** — Retrieval: Tier 1 injection + Tier 2 keyword search · `feat/kb-retrieval-tiers`
 - [x] **Phase 7** — Conversation engine & prompt assembly · `feat/conversation-engine`
 - [x] **Phase 8** — Web chat API, API keys & integration docs · `feat/web-channel-and-api-keys`
-- [ ] **Phase 9** — Async workers, scheduled sync & API-as-source · `feat/workers-and-scheduled-sync`
+- [x] **Phase 9** — Async workers, scheduled sync & API-as-source · `feat/workers-and-scheduled-sync`
 - [ ] **Phase 10** — WhatsApp channel · `feat/whatsapp-channel`
 - [ ] **Phase 11** — Agent tools: live API calls · `feat/agent-tools`
 - [ ] **Phase 12** — Analytics, logs & observability · `feat/analytics-and-observability`
@@ -408,7 +408,7 @@ generated docs are accurate enough to integrate against without reading the sour
 
 ## Phase 9 — Async workers, scheduled sync & API-as-source (Pattern B)
 
-- [ ] **Complete** · **Branch:** `feat/workers-and-scheduled-sync`
+- [x] **Complete** · **Branch:** `feat/workers-and-scheduled-sync`
 **Depends on:** Phases 5 and 8
 
 **Delivers**
