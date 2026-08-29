@@ -20,6 +20,7 @@ from src.shared.llm.base import (
     CompletionRequest,
     CompletionResult,
     LLMProvider,
+    Role,
     TokenUsage,
     ToolCall,
 )
@@ -57,6 +58,37 @@ def _content(message: ChatMessage) -> Any:
             )
     parts.append({"type": "text", "text": message.content})
     return parts
+
+
+def _message(message: ChatMessage) -> dict[str, Any]:
+    """One message in OpenAI's shape.
+
+    OpenAI is the one provider with a first-class ``tool`` role, so the mapping is nearly direct.
+    The assistant turn that made the calls still has to be replayed with them attached: the API
+    matches a result to its request by ``tool_call_id`` and rejects a result whose request is
+    missing.
+    """
+    if message.role is Role.TOOL:
+        return {
+            "role": "tool",
+            "tool_call_id": message.tool_call_id or "",
+            "content": message.content,
+        }
+
+    payload: dict[str, Any] = {"role": message.role.value, "content": _content(message)}
+    if message.tool_calls:
+        payload["tool_calls"] = [
+            {
+                "id": call.id,
+                "type": "function",
+                "function": {"name": call.name, "arguments": json.dumps(call.arguments)},
+            }
+            for call in message.tool_calls
+        ]
+        # An assistant turn that only called a tool has no text, and OpenAI wants null rather than
+        # an empty string alongside tool_calls.
+        payload["content"] = message.content or None
+    return payload
 
 
 @contextmanager
@@ -101,10 +133,7 @@ class OpenAIProvider(LLMProvider):
         messages: list[dict[str, Any]] = []
         if request.system:
             messages.append({"role": "system", "content": request.system})
-        messages.extend(
-            {"role": message.role.value, "content": _content(message)}
-            for message in request.messages
-        )
+        messages.extend(_message(message) for message in request.messages)
 
         payload: dict[str, Any] = {
             "model": request.model or DEFAULT_MODEL,
