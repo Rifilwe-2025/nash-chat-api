@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
@@ -153,15 +154,7 @@ class ConversationService:
         conversation_id: uuid.UUID | None = None,
     ) -> TurnResult:
         """Run one full turn and store both sides of it."""
-        message = content.strip()
-        if not message:
-            raise ValidationException("A message cannot be empty.", code="EMPTY_MESSAGE")
-        limit: int = configs.CONVERSATIONS_MAX_MESSAGE_CHARACTERS
-        if len(message) > limit:
-            raise ValidationException(
-                f"A message may be at most {limit} characters.", code="MESSAGE_TOO_LONG"
-            )
-
+        message = self._validated(content)
         agent = await self._agent_for_turn(agent_id, channel)
         conversation = await self._session_for(agent, channel, external_user_id, conversation_id)
 
@@ -200,15 +193,122 @@ class ConversationService:
 
         return await self._answer(agent, conversation, user_message, message)
 
+    async def stream_message(
+        self,
+        agent_id: uuid.UUID,
+        content: str,
+        channel: Channel = Channel.PREVIEW,
+        external_user_id: str = "preview",
+    ) -> tuple[Conversation, AsyncIterator[str]]:
+        """Run a turn, yielding the reply as it is written.
+
+        Returns the conversation *and* an iterator, rather than being a generator itself, so the
+        caller has the conversation id before the first token — a widget needs it to attach the
+        stream to the right thread.
+
+        A guardrail reply is not streamed from anywhere: the answer was decided in code, so it
+        arrives as one chunk. The caller cannot tell the difference, which is the point.
+
+        **Streamed turns record no token usage.** The providers' streaming APIs do not report it,
+        and the abstraction will not invent numbers it was not given. The message is stored with a
+        ``streamed`` marker so analytics can tell why the counts are zero rather than reading it as
+        a free call.
+        """
+        message = self._validated(content)
+        agent = await self._agent_for_turn(agent_id, channel)
+        conversation = await self._session_for(agent, channel, external_user_id, None)
+        await lock_conversation(self.session, conversation.id)
+
+        await self._store(conversation, MessageRole.USER, message)
+
+        decision = guardrails.evaluate(
+            message,
+            escalation_triggers=self._rules(agent, "escalation_triggers"),
+            restricted_topics=self._guardrails(agent, "restricted_topics"),
+        )
+        if decision.action is not guardrails.GuardrailAction.ALLOW:
+            escalating = decision.action is guardrails.GuardrailAction.ESCALATE
+            text = (
+                guardrails.escalation_response()
+                if escalating
+                else guardrails.decline_response(self._fallback(agent))
+            )
+            await self._store(
+                conversation,
+                MessageRole.ASSISTANT,
+                text,
+                meta={"guardrail": decision.action.value, "matched": decision.matched},
+            )
+            if escalating:
+                await self._escalate(conversation, decision.reason or "Escalation trigger matched.")
+            return conversation, _single_chunk(text)
+
+        request, provider, retrieval, history_turns = await self._prepare(
+            agent, conversation, message
+        )
+        return conversation, self._stream_and_store(
+            conversation, provider, request, retrieval, history_turns
+        )
+
+    async def _stream_and_store(
+        self,
+        conversation: Conversation,
+        provider: str,
+        request: CompletionRequest,
+        retrieval: RetrievalResult,
+        history_turns: int,
+    ) -> AsyncIterator[str]:
+        """Yield deltas, then store the assembled reply once the stream ends."""
+        pieces: list[str] = []
+        try:
+            async for delta in self._llm.stream(provider, request):
+                pieces.append(delta)
+                yield delta
+        except LLMError as exc:
+            # Bytes already sent cannot be un-sent, so this cannot become a 4xx. The client is told
+            # in band, and the partial text is still stored — a half answer in the transcript is
+            # more use to whoever investigates than a gap.
+            logger.warning("streamed provider call failed: %s", exc)
+            yield "\n\n[The reply was interrupted. Please try again.]"
+
+        text = "".join(pieces).strip()
+        if text:
+            await self._store(
+                conversation,
+                MessageRole.ASSISTANT,
+                text,
+                provider=provider,
+                model=request.model,
+                citations=self._citations(retrieval),
+                meta={
+                    "tier": retrieval.tier.value,
+                    "hasContext": retrieval.has_context,
+                    "historyTurns": history_turns,
+                    "streamed": True,
+                },
+            )
+
+    def _validated(self, content: str) -> str:
+        message = content.strip()
+        if not message:
+            raise ValidationException("A message cannot be empty.", code="EMPTY_MESSAGE")
+        limit: int = configs.CONVERSATIONS_MAX_MESSAGE_CHARACTERS
+        if len(message) > limit:
+            raise ValidationException(
+                f"A message may be at most {limit} characters.", code="MESSAGE_TOO_LONG"
+            )
+        return message
+
     # -- internals -----------------------------------------------------------
 
-    async def _answer(
-        self,
-        agent: Agent,
-        conversation: Conversation,
-        user_message: Message,
-        message: str,
-    ) -> TurnResult:
+    async def _prepare(
+        self, agent: Agent, conversation: Conversation, message: str
+    ) -> tuple[CompletionRequest, str, RetrievalResult, int]:
+        """Everything a turn needs before the provider is called.
+
+        Shared by the buffered and streamed paths so the two cannot drift: a streamed reply must be
+        produced from exactly the same prompt, knowledge and history as a buffered one.
+        """
         model = str(agent.model_config_json.get("model") or "")
         provider = agent.model_provider.value if agent.model_provider else ""
 
@@ -235,6 +335,28 @@ class ConversationService:
             max_tokens=int(agent.model_config_json.get("max_tokens") or DEFAULT_MAX_TOKENS),
             temperature=float(agent.model_config_json.get("temperature", DEFAULT_TEMPERATURE)),
         )
+        return request, provider, retrieval, len(turns)
+
+    def _citations(self, retrieval: RetrievalResult) -> list[Any]:
+        return [
+            {
+                "sourceId": str(citation.source_id),
+                "kbId": str(citation.kb_id),
+                "sourceName": citation.source_name,
+            }
+            for citation in retrieval.citations
+        ]
+
+    async def _answer(
+        self,
+        agent: Agent,
+        conversation: Conversation,
+        user_message: Message,
+        message: str,
+    ) -> TurnResult:
+        request, provider, retrieval, history_turns = await self._prepare(
+            agent, conversation, message
+        )
 
         try:
             result = await self._llm.complete(provider, request)
@@ -254,18 +376,11 @@ class ConversationService:
             model=result.model,
             prompt_tokens=result.usage.prompt_tokens,
             completion_tokens=result.usage.completion_tokens,
-            citations=[
-                {
-                    "sourceId": str(citation.source_id),
-                    "kbId": str(citation.kb_id),
-                    "sourceName": citation.source_name,
-                }
-                for citation in retrieval.citations
-            ],
+            citations=self._citations(retrieval),
             meta={
                 "tier": retrieval.tier.value,
                 "hasContext": retrieval.has_context,
-                "historyTurns": len(turns),
+                "historyTurns": history_turns,
             },
         )
         return TurnResult(conversation, user_message, reply, retrieval=retrieval)
@@ -457,3 +572,8 @@ class ConversationService:
     def _fallback(self, agent: Agent) -> str | None:
         value = (agent.guardrails or {}).get("fallback_response")
         return str(value) if value else None
+
+
+async def _single_chunk(text: str) -> AsyncIterator[str]:
+    """A guardrail reply, in the shape a streamed one arrives in."""
+    yield text

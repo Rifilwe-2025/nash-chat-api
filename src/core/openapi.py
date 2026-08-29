@@ -68,6 +68,31 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "api-keys",
+        "description": (
+            "Credentials for integrating an agent into your own product. A key is issued for one "
+            "agent, carries explicit scopes and its own rate limit, and is shown exactly once — "
+            "only a hash is stored. Revocation takes effect on the next request."
+        ),
+    },
+    {
+        "name": "channels",
+        "description": (
+            "Where an agent is reachable, and what the platform tells you about it. Channel "
+            "settings per agent, outbound webhooks for conversation events, and a generated "
+            "integration guide for handing to whoever is doing the integration."
+        ),
+    },
+    {
+        "name": "chat",
+        "description": (
+            "**The public chat API.** Authenticated by an agent API key rather than a user token, "
+            "and the only surface a tenant's own product talks to. Send a message and get a reply, "
+            "stream it as server-sent events, or fetch a conversation's history. Every response "
+            "carries the key's remaining rate-limit allowance."
+        ),
+    },
+    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "

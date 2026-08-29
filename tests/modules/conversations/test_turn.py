@@ -9,7 +9,7 @@ extra about the code in this repo.
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
 import pytest
@@ -58,6 +58,17 @@ class RecordingLLM:
             model=request.model,
             provider=provider,
         )
+
+    def stream(self, provider: str, request: CompletionRequest, api_key: str | None = None):  # type: ignore[no-untyped-def]
+        """Streamed deltas, split so a test sees more than one frame."""
+        self.requests.append((provider, request))
+        words = self.reply.split(" ")
+
+        async def iterator() -> AsyncIterator[str]:
+            for index, word in enumerate(words):
+                yield word if index == 0 else f" {word}"
+
+        return iterator()
 
     @property
     def last(self) -> CompletionRequest:

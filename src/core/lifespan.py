@@ -14,6 +14,7 @@ import redis.asyncio as aioredis
 from fastapi import FastAPI
 
 from src import configs
+from src.core.rate_limit import build_limiter
 from src.shared.database.engine import create_engine, create_session_factory
 
 logger = logging.getLogger("api.lifespan")
@@ -34,6 +35,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis = aioredis.from_url(  # type: ignore[no-untyped-call]
         configs.REDIS_URL, decode_responses=True
     )
+    app.state.rate_limiter = build_limiter()
 
     try:
         yield

@@ -41,9 +41,13 @@ async def text_event_stream(chunks: AsyncIterator[str]) -> AsyncIterator[str]:
     yield format_json_event({"done": True}, event="done")
 
 
-def sse_response(chunks: AsyncIterator[str]) -> StreamingResponse:
+def sse_response(
+    chunks: AsyncIterator[str], headers: dict[str, str] | None = None
+) -> StreamingResponse:
+    """``headers`` carries anything the caller needs before the first frame — the conversation id,
+    so a client can attach the stream to the right thread without parsing the body."""
     return StreamingResponse(
         text_event_stream(chunks),
         media_type="text/event-stream",
-        headers=SSE_HEADERS,
+        headers={**SSE_HEADERS, **(headers or {})},
     )
