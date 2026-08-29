@@ -17,8 +17,9 @@ from __future__ import annotations
 
 from src.core.queue import celery_app
 
-# Registers the knowledge base tasks on the app above. Imported for the side effect, which is the
-# whole point of the module.
+# Registers each module's tasks on the app above. Imported for the side effect, which is the whole
+# point of the module.
+from src.modules.channels.whatsapp.internal import tasks as whatsapp_tasks  # noqa: F401
 from src.modules.knowledge_base.internal import tasks as knowledge_base_tasks  # noqa: F401
 
 __all__ = ["celery_app"]
