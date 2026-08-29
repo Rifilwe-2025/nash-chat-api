@@ -1,3 +1,10 @@
+# Shared by the api, worker and beat services: all three talk to the same database and broker,
+# and all three must agree that work goes through the queue rather than running in the request.
+x-backing-services: &backing_services
+  DATABASE_URL: postgresql+asyncpg://postgres:qwerty@postgres:5432/nashdb
+  REDIS_URL: redis://redis:6379/0
+  QUEUE_MODE: redis
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -36,11 +43,38 @@ services:
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://postgres:qwerty@postgres:5432/nashdb
-      REDIS_URL: redis://redis:6379/0
+      <<: *backing_services
       HOST: 0.0.0.0
     ports:
       - "8000:8000"
+    profiles: ["full"]
+
+  worker:
+    build: .
+    container_name: nash-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *backing_services
+    # --pool=solo keeps the worker single-process. Extraction is I/O bound (a provider call or an
+    # HTTP fetch), so concurrency comes from running more worker containers rather than more
+    # processes inside one — and solo is the pool that behaves the same on every platform.
+    command: celery -A worker.celery_app worker --loglevel=info --pool=solo
+    profiles: ["full"]
+
+  beat:
+    build: .
+    container_name: nash-beat
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      <<: *backing_services
+    # Exactly one beat process, ever. Two schedulers means every due source is enqueued twice.
+    command: celery -A worker.celery_app beat --loglevel=info
     profiles: ["full"]
 
 volumes:

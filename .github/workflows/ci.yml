@@ -72,5 +72,10 @@ jobs:
       - name: Type check
         run: mypy
 
+      - name: Worker entrypoint imports
+        # A task that is not imported is not registered, and a worker rejects it at runtime rather
+        # than at deploy time. Importing the entrypoint here catches that in CI instead.
+        run: python -c "import worker; print(sorted(t for t in worker.celery_app.tasks if not t.startswith('celery.')))"
+
       - name: Tests
         run: pytest

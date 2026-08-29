@@ -30,8 +30,14 @@ warn_unused_ignores = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["slowapi.*"]
+module = ["slowapi.*", "celery.*"]
 ignore_missing_imports = true
+
+# Celery's task decorator is untyped, so every task shell would be reported as untyped even though
+# its body is fully annotated. The decorator is the only untyped thing in the module.
+[[tool.mypy.overrides]]
+module = ["src.modules.*.internal.tasks"]
+disallow_untyped_decorators = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -75,6 +75,25 @@ auth:
   access_ttl_minutes: "${ACCESS_TOKEN_TTL_MINUTES:15} | int"
   refresh_ttl_days: "${REFRESH_TOKEN_TTL_DAYS:14} | int"
 
+queue:
+  # "redis" hands work to a worker and is what any deployment should use. "inline" runs it in the
+  # caller instead — convenient locally and in tests, but the request still blocks.
+  mode: "${QUEUE_MODE:inline} | str"
+  task_soft_time_limit_seconds: "${QUEUE_TASK_SOFT_TIME_LIMIT_SECONDS:270} | int"
+  task_time_limit_seconds: "${QUEUE_TASK_TIME_LIMIT_SECONDS:300} | int"
+  max_retries: "${QUEUE_MAX_RETRIES:3} | int"
+  retry_backoff_seconds: "${QUEUE_RETRY_BACKOFF_SECONDS:30} | int"
+
+sync:
+  # Default re-sync interval for a source that does not set its own. Zero disables scheduling.
+  default_interval_minutes: "${SYNC_DEFAULT_INTERVAL_MINUTES:0} | int"
+  min_interval_minutes: "${SYNC_MIN_INTERVAL_MINUTES:15} | int"
+  # Consecutive failures before the source is reported as broken to the tenant (spec §5.2.1).
+  failure_alert_threshold: "${SYNC_FAILURE_ALERT_THRESHOLD:3} | int"
+  # How many records one connector pull may walk before stopping.
+  max_records: "${SYNC_MAX_RECORDS:5000} | int"
+  max_pages: "${SYNC_MAX_PAGES:50} | int"
+
 rate_limit:
   # "redis" is required in any deployment with more than one worker — the in-memory backend counts
   # per process, so the limit a tenant was sold would be multiplied by the worker count.
