@@ -75,6 +75,19 @@ auth:
   access_ttl_minutes: "${ACCESS_TOKEN_TTL_MINUTES:15} | int"
   refresh_ttl_days: "${REFRESH_TOKEN_TTL_DAYS:14} | int"
 
+rate_limit:
+  # "redis" is required in any deployment with more than one worker — the in-memory backend counts
+  # per process, so the limit a tenant was sold would be multiplied by the worker count.
+  backend: "${RATE_LIMIT_BACKEND:memory} | str"
+  # Default requests per minute for a new API key, when the caller does not set one.
+  default_per_minute: "${RATE_LIMIT_DEFAULT_PER_MINUTE:60} | int"
+  max_per_minute: "${RATE_LIMIT_MAX_PER_MINUTE:6000} | int"
+
+webhooks:
+  timeout_seconds: "${WEBHOOK_TIMEOUT_SECONDS:5} | float"
+  # Signing secrets are generated per endpoint; this is the header the signature travels in.
+  signature_header: "${WEBHOOK_SIGNATURE_HEADER:X-Nash-Signature} | str"
+
 docs:
   enabled: "${DOCS_ENABLED:true} | bool"
   swagger_path: "${DOCS_SWAGGER_PATH:/docs} | str"

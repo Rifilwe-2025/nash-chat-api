@@ -1,8 +1,8 @@
 """Raw ASGI middleware.
 
 Deliberately not ``BaseHTTPMiddleware``: that buffers responses and breaks the SSE streaming the
-chat endpoints will need. Every request is tagged with an ``X-Request-ID`` and logged once on
-completion.
+chat endpoints need. Every request is tagged with an ``X-Request-ID`` and logged once on completion,
+and any rate limit verdict reached during the request is copied onto the response.
 """
 
 from __future__ import annotations
@@ -47,6 +47,11 @@ class RequestContextMiddleware:
                 status_code = message["status"]
                 message.setdefault("headers", [])
                 message["headers"].append((REQUEST_ID_HEADER, request_id.encode()))
+                # Rate limit headers are attached here rather than per route: the verdict is
+                # reached in a dependency, and every response under a limit should carry it —
+                # a client should learn its remaining allowance from a success, not only a 429.
+                for name, value in state.get("rate_limit_headers", {}).items():
+                    message["headers"].append((name.lower().encode(), str(value).encode()))
             await send(message)
 
         try:
