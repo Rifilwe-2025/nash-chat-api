@@ -2,10 +2,13 @@
 
 A tenant-supplied URL is an outbound request this server makes on their behalf, which makes it an
 SSRF surface: `http://169.254.169.254/` or `http://localhost:6379/` would otherwise reach cloud
-metadata and Redis from inside the network. The spec calls this out for agent tools (§5.2.1), and
-the same reasoning applies to ingestion — so every host is resolved and checked against the private
-ranges *before* the request, and again on each redirect hop, since a public host can redirect to a
-private one.
+metadata and Redis from inside the network. The address check itself lives in ``src/shared/net`` —
+agent tools (§5.2.1) make the same kind of request and must apply the same rule, and one copy of a
+security check cannot disagree with another. What stays here is what ingestion knows: the size cap,
+the redirect policy, and the fact that a failure is an :class:`ExtractionError` a tenant reads on
+their source.
+
+The URL is re-checked on **each redirect hop**, since a public host can redirect to a private one.
 
 The size cap is enforced while streaming rather than after: a caller must not be able to make the
 server buffer an unbounded response by pointing it at a large file.
@@ -13,17 +16,14 @@ server buffer an unbounded response by pointing it at a large file.
 
 from __future__ import annotations
 
-import ipaddress
-import socket
 from dataclasses import dataclass
-from urllib.parse import urlsplit
 
 import httpx
 
 from src import configs
 from src.modules.knowledge_base.internal.extractors.base import ExtractionError
+from src.shared.net import UnsafeUrlError, assert_public_url
 
-ALLOWED_SCHEMES = frozenset({"http", "https"})
 MAX_REDIRECTS = 5
 USER_AGENT = "NashChatBot/1.0 (+knowledge-base ingestion)"
 
@@ -35,42 +35,17 @@ class FetchedPage:
     media_type: str
 
 
-def _is_public(address: str) -> bool:
-    ip = ipaddress.ip_address(address)
-    return not (
-        ip.is_private
-        or ip.is_loopback
-        or ip.is_link_local
-        or ip.is_reserved
-        or ip.is_multicast
-        or ip.is_unspecified
-    )
-
-
 def assert_fetchable(url: str) -> None:
-    """Reject anything that is not a public http(s) URL, before a request is made."""
-    parts = urlsplit(url)
-    if parts.scheme not in ALLOWED_SCHEMES:
-        raise ExtractionError("Only http and https URLs can be used as a source.")
-    if not parts.hostname:
-        raise ExtractionError("The URL has no host.")
+    """Reject anything that is not a public http(s) URL, before a request is made.
 
-    if configs.KNOWLEDGE_BASE_ALLOW_PRIVATE_URLS:
-        return
-
+    A thin translation over the shared check: the rule is the same one agent tools apply, and the
+    only ingestion-specific part is that a rejection reads as an ``ExtractionError``, which the
+    service records on the source for the tenant to see.
+    """
     try:
-        resolved = socket.getaddrinfo(parts.hostname, parts.port or 80, proto=socket.IPPROTO_TCP)
-    except socket.gaierror as exc:
-        raise ExtractionError(f"The host {parts.hostname!r} could not be resolved.") from exc
-
-    # Every address the host resolves to must be public: one private answer is enough to reach an
-    # internal service, and which answer is used is not ours to decide.
-    for info in resolved:
-        address = str(info[4][0])
-        if not _is_public(address):
-            raise ExtractionError(
-                "That URL resolves to a private or internal address and cannot be fetched."
-            )
+        assert_public_url(url, allow_private=configs.KNOWLEDGE_BASE_ALLOW_PRIVATE_URLS)
+    except UnsafeUrlError as exc:
+        raise ExtractionError(str(exc)) from exc
 
 
 async def fetch(url: str, max_bytes: int, client: httpx.AsyncClient | None = None) -> FetchedPage:
