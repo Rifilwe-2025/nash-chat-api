@@ -35,6 +35,17 @@ llm:
   retry_max_delay_seconds: "${LLM_RETRY_MAX_DELAY_SECONDS:8} | float"
   # Provider used when the configured one is rate limited or down. Empty disables fallback.
   fallback_provider: "${LLM_FALLBACK_PROVIDER:} | str"
+  # Per-model prices for cost recording, as "<model-prefix>=<input>/<output>" in USD per million
+  # tokens. Nothing is assumed: a model with no entry records tokens but no cost.
+  price_table: "${LLM_PRICE_TABLE:} | list"
+
+conversations:
+  # Share of the remaining context window that conversation history may use, after the system
+  # prompt and the reserved output room are taken out (spec §5.4).
+  history_budget_fraction: "${CONVERSATION_HISTORY_BUDGET_FRACTION:0.5} | float"
+  # Turns trimmed out of the prompt are folded into a rolling summary before they are dropped.
+  summary_max_tokens: "${CONVERSATION_SUMMARY_MAX_TOKENS:512} | int"
+  max_message_characters: "${CONVERSATION_MAX_MESSAGE_CHARACTERS:8000} | int"
 
 knowledge_base:
   # Ingestion limits (spec §5.2). Bytes, checked before anything is extracted or stored.
