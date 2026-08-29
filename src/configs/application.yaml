@@ -94,6 +94,23 @@ sync:
   max_records: "${SYNC_MAX_RECORDS:5000} | int"
   max_pages: "${SYNC_MAX_PAGES:50} | int"
 
+tools:
+  # Pattern A live tool calls (spec §5.2.1). A customer is waiting on every one of these, so the
+  # timeout is short and the retry budget is one — a tool that has failed twice has failed.
+  timeout_seconds: "${TOOLS_TIMEOUT_SECONDS:8} | float"
+  max_retries: "${TOOLS_MAX_RETRIES:1} | int"
+  # Ceiling on tool calls in one turn, when an agent's policy does not set its own. Bounds both
+  # cost and the loop where a model keeps asking for the same tool.
+  max_calls_per_turn: "${TOOLS_MAX_CALLS_PER_TURN:3} | int"
+  # How much of a tool's rendered response may enter the prompt. A verbose API must not be able to
+  # push the knowledge base or the conversation history out of the context window.
+  max_result_characters: "${TOOLS_MAX_RESULT_CHARACTERS:4000} | int"
+  user_agent: "${TOOLS_USER_AGENT:NashChatBot/1.0 (+agent-tools)} | str"
+  # Allow tools whose host resolves to a private or loopback address. Off outside local
+  # development: a tool endpoint is called with model-written arguments, so it is the last
+  # place that should be able to reach inside the network.
+  allow_private_urls: "${TOOLS_ALLOW_PRIVATE_URLS:false} | bool"
+
 rate_limit:
   # "redis" is required in any deployment with more than one worker — the in-memory backend counts
   # per process, so the limit a tenant was sold would be multiplied by the worker count.

@@ -15,6 +15,7 @@ from fastapi import FastAPI
 
 from src import configs
 from src.core.rate_limit import build_limiter
+from src.modules.tools.internal.cache import ResponseCache
 from src.shared.database.engine import create_engine, create_session_factory
 
 logger = logging.getLogger("api.lifespan")
@@ -36,6 +37,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         configs.REDIS_URL, decode_responses=True
     )
     app.state.rate_limiter = build_limiter()
+    # One tool-response cache per process, so a repeated identical lookup within a few seconds
+    # is not paid for twice. In-process on purpose — see tools/internal/cache.py.
+    app.state.tool_cache = ResponseCache()
 
     try:
         yield
