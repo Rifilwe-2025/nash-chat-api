@@ -2,10 +2,15 @@
 
 Two things are worth knowing before reading further.
 
+**Extraction happens off the request path.** A source is written as ``PENDING`` and a worker
+advances it to ``READY`` or ``FAILED`` (Phase 9). The upload returns as soon as the row exists, so a
+40 MB PDF read by a model no longer holds a request open for a minute. In ``inline`` queue mode the
+work still runs in the caller — that is a local-development convenience, not how a deployment runs.
+
 **Extraction failure is not an error response.** A password-protected PDF, a 404 URL, or a CSV with
 no rows produces a source in ``FAILED`` status carrying a readable ``error_detail`` — the upload
-itself succeeds. That is the phase's bar: a bad document must be inspectable in the API, not a 500.
-Limit and type violations are the exception, since they are rejected before anything is stored.
+itself succeeds. A bad document must be inspectable in the API, not a 500. Limit and type
+violations are the exception, since they are rejected before anything is stored.
 
 **Cross-module access goes service → service.** Attaching a knowledge base to an agent asks
 ``AgentService`` for the agent; this module never touches the agents module's repositories or
@@ -17,12 +22,13 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import configs
+from src.core import queue
 from src.modules.agents.domain.services import AgentService
 from src.modules.knowledge_base.domain.models import (
     AgentKbLink,
@@ -37,7 +43,7 @@ from src.modules.knowledge_base.domain.repositories import (
     KbSourceRepository,
     KnowledgeBaseRepository,
 )
-from src.modules.knowledge_base.internal import limits
+from src.modules.knowledge_base.internal import limits, tasks
 from src.modules.knowledge_base.internal.extractors import (
     ExtractedContent,
     ExtractionError,
@@ -46,7 +52,6 @@ from src.modules.knowledge_base.internal.extractors import (
     get_extractor,
     media_type_for,
 )
-from src.modules.knowledge_base.internal.fetching import fetch
 from src.modules.knowledge_base.internal.retrieval import (
     NoContextReason,
     RetrievalResult,
@@ -300,7 +305,7 @@ class KnowledgeBaseService:
         )
 
     async def add_url_source(self, kb_id: uuid.UUID, url: str, name: str | None = None) -> KbSource:
-        """Ingest a web page. The fetch itself may fail — that lands as a failed source."""
+        """Ingest a web page. The fetch happens in the worker, so a slow site does not block."""
         knowledge_base = await self.get(kb_id)
 
         source = await self.sources.add(
@@ -308,33 +313,102 @@ class KnowledgeBaseService:
                 kb_id=knowledge_base.id,
                 name=name or url,
                 type=SourceType.URL,
-                status=SourceStatus.PROCESSING,
+                status=SourceStatus.PENDING,
                 config_json={"url": url},
                 byte_size=0,
             )
         )
+        return await self._dispatch_extraction(source, content=None)
 
-        # Only extraction failures are caught. A storage-limit breach is the tenant's to fix
-        # immediately, so it propagates as a 4xx and the row written above goes with the rollback
-        # the session dependency performs on the way out.
-        try:
-            page = await fetch(url, max_bytes=limits.max_source_bytes())
-            await self._assert_within_limits(len(page.body))
-            # Raised as an extraction failure rather than a 422: the tenant supplied a URL, and
-            # what the server on the other end chose to serve is a property of the page.
-            media_type = media_type_for(page.url, page.media_type)
-            result = await self._extract(
-                ExtractedContent(data=page.body, media_type=media_type, filename=page.url)
+    async def add_api_source(
+        self,
+        kb_id: uuid.UUID,
+        name: str,
+        connector: dict[str, Any],
+        sync_interval_minutes: int | None = None,
+    ) -> KbSource:
+        """Add a Pattern B API source and pull it for the first time (spec §5.2.1).
+
+        The first pull happens now rather than at the next sweep: a tenant who has just configured a
+        connector wants to know immediately whether the endpoint and credentials work, not in
+        fifteen minutes.
+        """
+        knowledge_base = await self.get(kb_id)
+        interval = self._validate_interval(sync_interval_minutes)
+
+        source = await self.sources.add(
+            KbSource(
+                kb_id=knowledge_base.id,
+                name=name,
+                type=SourceType.API_INDEXED,
+                status=SourceStatus.PENDING,
+                config_json={"connector": connector},
+                byte_size=0,
+                sync_interval_minutes=interval,
             )
-        except ExtractionError as exc:
-            return await self._mark_failed(source, str(exc))
-
-        return await self._mark_ready(
-            source,
-            result,
-            byte_size=len(page.body),
-            config={"url": url, "resolvedUrl": page.url, "mediaType": media_type},
         )
+        return await self._dispatch_sync(source)
+
+    async def sync_now(self, kb_id: uuid.UUID, source_id: uuid.UUID) -> KbSource:
+        """Re-pull a source on demand — the manual half of §5.2's re-sync controls."""
+        source = await self.get_source(kb_id, source_id)
+
+        if source.type is SourceType.API_INDEXED:
+            return await self._dispatch_sync(source)
+        if source.type is SourceType.URL:
+            return await self._dispatch_extraction(source, content=None)
+        raise ValidationException(
+            "Only URL and API sources can be re-synced; a file or FAQ entry has no origin to "
+            "re-read.",
+            code="KB_SOURCE_NOT_SYNCABLE",
+        )
+
+    async def set_sync_schedule(
+        self, kb_id: uuid.UUID, source_id: uuid.UUID, interval_minutes: int
+    ) -> KbSource:
+        """Change how often a source re-syncs. Zero stops it."""
+        source = await self.get_source(kb_id, source_id)
+        if source.type not in (SourceType.API_INDEXED, SourceType.URL):
+            raise ValidationException(
+                "Only URL and API sources can be scheduled.", code="KB_SOURCE_NOT_SYNCABLE"
+            )
+
+        interval = self._validate_interval(interval_minutes)
+        return await self.sources.update(
+            source,
+            sync_interval_minutes=interval,
+            next_sync_at=(
+                datetime.now(UTC) + timedelta(minutes=interval) if interval > 0 else None
+            ),
+        )
+
+    async def _dispatch_sync(self, source: KbSource) -> KbSource:
+        if queue.is_inline():
+            synced = await tasks.sync_source(self.session, source.id)
+            return synced or source
+
+        queue.enqueue(tasks.sync_source_task, str(source.id))
+        return source
+
+    def _validate_interval(self, minutes: int | None) -> int:
+        """Zero disables scheduling; anything else must be at least the configured floor.
+
+        The floor exists to protect the *tenant's* API as much as ours — a one-minute sync against
+        someone's CMS is a way to get rate limited by your own supplier.
+        """
+        if minutes is None:
+            default: int = configs.SYNC_DEFAULT_INTERVAL_MINUTES
+            return default
+        if minutes == 0:
+            return 0
+
+        floor: int = configs.SYNC_MIN_INTERVAL_MINUTES
+        if minutes < floor:
+            raise ValidationException(
+                f"The sync interval must be 0 (never) or at least {floor} minutes.",
+                code="KB_SYNC_INTERVAL_TOO_SHORT",
+            )
+        return minutes
 
     async def add_manual_source(self, kb_id: uuid.UUID, title: str, body: str) -> KbSource:
         """A FAQ entry typed into the builder — no extraction, the text is already text."""
@@ -369,31 +443,50 @@ class KnowledgeBaseService:
         source_type: SourceType,
         byte_size: int,
         config: dict[str, Any],
-        content: ExtractedContent,
+        content: ExtractedContent | None = None,
     ) -> KbSource:
-        """Record the source, then extract into it.
+        """Record the source, then hand its extraction to a worker.
 
-        The row is written *before* extraction so a failure has somewhere to be recorded, which is
-        also the shape Phase 9 needs when extraction moves onto the queue: the row exists in
-        ``PROCESSING`` and a worker finishes it.
+        The row is written first so a failure has somewhere to be recorded and the tenant can see
+        the source waiting. What happens next depends on the queue mode, and only the mode differs —
+        both paths run exactly the same extraction code.
         """
         source = await self.sources.add(
             KbSource(
                 kb_id=knowledge_base.id,
                 name=name,
                 type=source_type,
-                status=SourceStatus.PROCESSING,
-                config_json=config,
+                status=SourceStatus.PENDING,
+                config_json=self._staged(config, content),
                 byte_size=byte_size,
             )
         )
+        return await self._dispatch_extraction(source, content)
 
-        try:
-            result = await self._extract(content)
-        except ExtractionError as exc:
-            return await self._mark_failed(source, str(exc))
+    async def _dispatch_extraction(
+        self, source: KbSource, content: ExtractedContent | None
+    ) -> KbSource:
+        if queue.is_inline():
+            extracted = await tasks.extract_source(
+                self.session, source.id, content=content, llm_extractor=self._llm_extractor
+            )
+            return extracted or source
 
-        return await self._mark_ready(source, result, byte_size=byte_size)
+        queue.enqueue(tasks.extract_source_task, str(source.id))
+        return source
+
+    def _staged(self, config: dict[str, Any], content: ExtractedContent | None) -> dict[str, Any]:
+        """Keep an uploaded file's bytes where the worker can find them.
+
+        Base64 on the row is frankly a stopgap — object storage is the right home for a 10 MB
+        upload and is Phase 13's to add. It is written only when a worker will need it, so the
+        inline path never pays for it, and it is dropped as soon as extraction succeeds.
+        """
+        if content is None or queue.is_inline():
+            return config
+        import base64
+
+        return {**config, tasks.UPLOAD_STAGE_KEY: base64.b64encode(content.data).decode("ascii")}
 
     async def _extract(self, content: ExtractedContent) -> ExtractionResult:
         extractor = get_extractor(content.media_type, self._llm_extractor)

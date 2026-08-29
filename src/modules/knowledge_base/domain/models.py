@@ -25,6 +25,7 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -56,12 +57,15 @@ class RetrievalTier(str, enum.Enum):
 class SourceType(str, enum.Enum):
     """Where a source's content came from.
 
-    ``api_indexed`` (spec §5.2.1 Pattern B) arrives with the scheduled sync in Phase 9.
+    ``API_INDEXED`` is Pattern B (spec §5.2.1): a connector pulls records from an API on a schedule
+    and feeds them through the same extraction path as a file. It is *indexed* content — Pattern A,
+    the live tool call at query time, is a different thing entirely and arrives in Phase 11.
     """
 
     FILE = "file"
     URL = "url"
     MANUAL = "manual"
+    API_INDEXED = "api_indexed"
 
 
 class SourceStatus(str, enum.Enum):
@@ -149,6 +153,30 @@ class KbSource(TenantScopedModel):
     source_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    # -- scheduling (spec §5.2.1 Pattern B) ---------------------------------------------
+    #
+    # The interval lives on the row rather than in a static scheduler config, because a tenant
+    # changes it and a scheduler restart is not an acceptable cost for that. A sweep asks the
+    # database what is due; see `internal/tasks.py`.
+    sync_interval_minutes: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+        doc="Zero means the source is never re-synced automatically.",
+    )
+    next_sync_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    # Consecutive failures. A source that keeps failing is reported to the tenant rather than
+    # quietly rotting — an expired credential or a changed schema is the usual cause (§5.2.1).
+    consecutive_failures: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    # The source's own version marker from the last successful pull — an ETag, a `last_modified`,
+    # or a content hash. It is what lets an unchanged record be skipped instead of re-extracted.
+    sync_cursor: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     # Tier 2's index (spec §5.2.2). A generated column rather than a trigger or an application
     # write: Postgres recomputes it whenever the text changes, so the index cannot drift out of
