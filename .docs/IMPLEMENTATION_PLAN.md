@@ -23,7 +23,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 5** — Knowledge base: model, sources & extraction · `feat/kb-ingestion`
 - [x] **Phase 6** — Retrieval: Tier 1 injection + Tier 2 keyword search · `feat/kb-retrieval-tiers`
 - [x] **Phase 7** — Conversation engine & prompt assembly · `feat/conversation-engine`
-- [ ] **Phase 8** — Web chat API, API keys & integration docs · `feat/web-channel-and-api-keys`
+- [x] **Phase 8** — Web chat API, API keys & integration docs · `feat/web-channel-and-api-keys`
 - [ ] **Phase 9** — Async workers, scheduled sync & API-as-source · `feat/workers-and-scheduled-sync`
 - [ ] **Phase 10** — WhatsApp channel · `feat/whatsapp-channel`
 - [ ] **Phase 11** — Agent tools: live API calls · `feat/agent-tools`
@@ -383,7 +383,7 @@ text in the KB or the user message does not override the system instructions.
 
 ## Phase 8 — Web chat API, API keys & integration docs
 
-- [ ] **Complete** · **Branch:** `feat/web-channel-and-api-keys`
+- [x] **Complete** · **Branch:** `feat/web-channel-and-api-keys`
 **Depends on:** Phase 7
 
 **Delivers**
