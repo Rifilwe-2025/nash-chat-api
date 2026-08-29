@@ -15,6 +15,7 @@ from typing import Any
 from pydantic import Field, field_validator
 
 from src.modules.knowledge_base.domain.models import RetrievalTier, SourceStatus, SourceType
+from src.modules.knowledge_base.internal.retrieval import NoContextReason
 from src.shared.responses import CamelModel
 
 MAX_MANUAL_BODY = 100_000
@@ -34,12 +35,13 @@ class CreateKnowledgeBaseRequest(CamelModel):
         examples=["Interior and exterior paint ranges, coverage rates and prices."],
     )
     retrieval_tier: RetrievalTier = Field(
-        default=RetrievalTier.DIRECT,
+        default=RetrievalTier.AUTO,
         description=(
-            "How the content reaches the prompt. `direct` injects the whole knowledge base; "
-            "`keyword` searches it first. Automatic tier selection arrives with retrieval."
+            "How the content reaches the prompt. Leave on `auto` and the tier is chosen per query "
+            "from how much text the knowledge base holds, so it keeps working as it grows. "
+            "`direct` always injects the whole knowledge base; `keyword` always searches it first."
         ),
-        examples=["direct"],
+        examples=["auto"],
     )
 
 
@@ -173,3 +175,86 @@ class StorageUsageResponse(CamelModel):
     used_bytes: int = Field(description="Bytes stored across every knowledge base.")
     limit_bytes: int = Field(description="Total bytes this tenant may store.")
     max_source_bytes: int = Field(description="Largest single source accepted.")
+
+
+class RetrievalRequest(CamelModel):
+    """Ask what a query would pull out of a knowledge base, and how (spec §5.2)."""
+
+    query: str = Field(
+        min_length=1,
+        max_length=2000,
+        description="The question to retrieve for, as an end user would phrase it.",
+        examples=["Can I return tinted paint?"],
+    )
+    model: str | None = Field(
+        default=None,
+        max_length=128,
+        description=(
+            "Model the answer is destined for. Its context window sets the injection budget, so "
+            "the tier chosen can differ between models. Defaults to a conservative budget."
+        ),
+        examples=["gemini-2.0-flash"],
+    )
+
+
+class CitationResponse(CamelModel):
+    """Where a passage came from — carried on every result, for logging and debugging."""
+
+    source_id: uuid.UUID
+    kb_id: uuid.UUID
+    source_name: str = Field(examples=["Returns policy.docx"])
+    source_type: SourceType
+    url: str | None = Field(default=None, description="Present for sources ingested from a URL.")
+
+
+class PassageResponse(CamelModel):
+    text: str = Field(
+        description=(
+            "The knowledge itself. Under `direct` this is a whole source; under `keyword` it is "
+            "the fragment matched around the query, cut out at search time — not a stored chunk."
+        )
+    )
+    citation: CitationResponse
+    score: float | None = Field(
+        default=None,
+        description="Relevance rank. Present for `keyword` results only; `direct` does not rank.",
+        examples=[0.138],
+    )
+
+
+class RetrievalExplainResponse(CamelModel):
+    """What a query would pull, and why that tier ran."""
+
+    tier: RetrievalTier = Field(description="The tier that ran.", examples=["keyword"])
+    tier_forced: bool = Field(
+        description="True when the knowledge base pins the tier rather than choosing per query."
+    )
+    tier_reason: str = Field(
+        description="Why this tier ran, in plain language.",
+        examples=[
+            "184320 characters of knowledge exceed the 48000 character budget, so the query is "
+            "searched instead"
+        ],
+    )
+    considered_characters: int = Field(
+        description="Characters of extracted text across the knowledge bases in scope."
+    )
+    budget_characters: int = Field(
+        description="Characters that may be injected whole before searching is used instead."
+    )
+    has_context: bool = Field(
+        description=(
+            "False when nothing relevant was found. This is an answer, not a failure: an agent "
+            "seeing it uses its configured fallback response rather than guessing."
+        )
+    )
+    no_context_reason: NoContextReason | None = Field(
+        default=None,
+        description=(
+            "Why nothing came back — `empty_knowledge_base`, `no_match`, or `below_threshold`."
+        ),
+    )
+    passages: list[PassageResponse] = Field(
+        default_factory=list, description="What would be injected, in the order it would appear."
+    )
+    retrieved_characters: int = Field(description="Total size of the passages above.")

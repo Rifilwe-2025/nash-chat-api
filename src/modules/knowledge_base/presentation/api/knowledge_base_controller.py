@@ -5,16 +5,21 @@ from typing import Annotated
 
 from fastapi import Depends, File, Form, Path, Query, UploadFile
 
-from src.modules.knowledge_base.domain.models import KbSource, KnowledgeBase
+from src.modules.knowledge_base.domain.models import KbSource, KnowledgeBase, SourceType
 from src.modules.knowledge_base.domain.services import KnowledgeBaseService
 from src.modules.knowledge_base.internal import limits
+from src.modules.knowledge_base.internal.retrieval import RetrievalResult, TierDecision
 from src.modules.knowledge_base.presentation.dtos.knowledge_base import (
     AddManualSourceRequest,
     AddUrlSourceRequest,
     AttachedAgentsResponse,
+    CitationResponse,
     CreateKnowledgeBaseRequest,
     KnowledgeBaseResponse,
     KnowledgeBaseSummaryResponse,
+    PassageResponse,
+    RetrievalExplainResponse,
+    RetrievalRequest,
     SourceResponse,
     SourceSummaryResponse,
     StorageUsageResponse,
@@ -206,6 +211,98 @@ async def get_usage(service: KbServiceDep) -> ApiResponse[StorageUsageResponse]:
             max_source_bytes=limits.max_source_bytes(),
         )
     )
+
+
+EXPLAIN_DESCRIPTION = (
+    "Runs the retrieval an agent would run for this query and shows the result **and the "
+    "reasoning**: which tier ran, why, and the exact passages that would reach the prompt.\n\n"
+    "Tier selection is automatic unless the knowledge base pins it. Everything that fits the "
+    "injection budget is passed whole (`direct`); anything larger is searched with Postgres "
+    "full-text search and only the matching passages are used (`keyword`). The budget depends on "
+    "the target model, so pass `model` to see what a particular agent would get.\n\n"
+    "`hasContext: false` is a real answer, not a failure — it means nothing relevant was found, "
+    "and an agent seeing it uses its configured fallback response instead of guessing. "
+    "`noContextReason` says which of the three ways that happened."
+)
+
+
+def _explain(decision: TierDecision, result: RetrievalResult) -> RetrievalExplainResponse:
+    return RetrievalExplainResponse(
+        tier=result.tier,
+        tier_forced=decision.forced,
+        tier_reason=decision.reason,
+        considered_characters=result.considered_characters,
+        budget_characters=result.budget_characters,
+        has_context=result.has_context,
+        no_context_reason=result.no_context_reason,
+        passages=[
+            PassageResponse(
+                text=passage.text,
+                citation=CitationResponse(
+                    source_id=passage.citation.source_id,
+                    kb_id=passage.citation.kb_id,
+                    source_name=passage.citation.source_name,
+                    source_type=SourceType(passage.citation.source_type),
+                    url=passage.citation.url,
+                ),
+                score=passage.score,
+            )
+            for passage in result.passages
+        ],
+        retrieved_characters=result.characters,
+    )
+
+
+@router.post(
+    "/retrieval/explain",
+    response_model=ApiResponse[RetrievalExplainResponse],
+    summary="Explain what an agent would retrieve",
+    description=(
+        "Retrieves across **every knowledge base attached to the agent**, which is what the agent "
+        "itself will do at conversation time.\n\n" + EXPLAIN_DESCRIPTION
+    ),
+    responses={
+        200: {"description": "The passages that would be injected, and why."},
+        401: UNAUTHORIZED,
+        404: {"description": "No such agent in your tenant (`AGENT_NOT_FOUND`)."},
+        422: {"description": "The payload failed validation (`VALIDATION_ERROR`)."},
+    },
+)
+async def explain_agent_retrieval(
+    payload: RetrievalRequest,
+    service: KbServiceDep,
+    agent_id: Annotated[
+        uuid.UUID, Query(alias="agentId", description="Agent whose knowledge bases to search.")
+    ],
+) -> ApiResponse[RetrievalExplainResponse]:
+    decision, result = await service.explain_retrieval(
+        payload.query, agent_id=agent_id, model=payload.model
+    )
+    return ApiResponse.ok(_explain(decision, result))
+
+
+@router.post(
+    "/{kb_id}/retrieval/explain",
+    response_model=ApiResponse[RetrievalExplainResponse],
+    summary="Explain what a knowledge base would retrieve",
+    description=(
+        "Retrieves against this knowledge base alone — useful for checking one body of knowledge "
+        "before attaching it to anything.\n\n" + EXPLAIN_DESCRIPTION
+    ),
+    responses={
+        200: {"description": "The passages that would be injected, and why."},
+        401: UNAUTHORIZED,
+        404: NOT_FOUND,
+        422: {"description": "The payload failed validation (`VALIDATION_ERROR`)."},
+    },
+)
+async def explain_kb_retrieval(
+    kb_id: KbIdPath, payload: RetrievalRequest, service: KbServiceDep
+) -> ApiResponse[RetrievalExplainResponse]:
+    decision, result = await service.explain_retrieval(
+        payload.query, kb_id=kb_id, model=payload.model
+    )
+    return ApiResponse.ok(_explain(decision, result))
 
 
 @router.get(
