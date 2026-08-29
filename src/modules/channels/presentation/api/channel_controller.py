@@ -22,7 +22,7 @@ from src.modules.channels.presentation.dtos.channel import (
 from src.modules.tenants.presentation.dependencies import CurrentTenantDep
 from src.shared.database.dependencies import SessionDep
 from src.shared.database.pagination import PageParamsDep
-from src.shared.exceptions import NotFoundException
+from src.shared.exceptions import ConflictException, NotFoundException
 from src.shared.responses import ApiResponse, PaginatedResponse, create_router
 
 router = create_router(tags=["channels"])
@@ -124,6 +124,12 @@ async def get_integration_docs(
         )
 
     base_url = str(request.base_url).rstrip("/")
+
+    # The WhatsApp section appears only when a number is actually connected. Read through the
+    # channel service rather than the WhatsApp module's own, because this controller belongs to
+    # `channels` and cross-module access is service to service.
+    whatsapp = await service.configs.for_agent(agent.id, ChannelType.WHATSAPP)
+
     markdown = integration_docs.build(
         agent_name=agent.name,
         agent_id=str(agent.id),
@@ -133,6 +139,10 @@ async def get_integration_docs(
         rate_limit=rate_limit,
         signature_header=configs.WEBHOOKS_SIGNATURE_HEADER,
         schema=request.app.openapi(),
+        whatsapp_connection_id=str(whatsapp.id) if whatsapp else None,
+        whatsapp_phone_number_id=(
+            str(whatsapp.credentials_json.get("phoneNumberId") or "") if whatsapp else None
+        ),
     )
 
     return ApiResponse.ok(
@@ -152,12 +162,20 @@ async def get_integration_docs(
     description=(
         "Creates or updates this agent's settings for one channel. A channel with no configuration "
         "is **open** — a published agent answers on the web channel out of the box — so this is "
-        "for narrowing behaviour rather than switching it on."
+        "for narrowing behaviour rather than switching it on.\n\n"
+        "**WhatsApp is not configured here.** It needs validated credentials and issues a verify "
+        "token, neither of which an untyped settings blob can do — use "
+        "`PUT /agents/{agentId}/channels/whatsapp` instead."
     ),
     responses={
         200: {"description": "The channel configuration."},
         401: UNAUTHORIZED,
         404: {"description": "No such agent in your tenant (`AGENT_NOT_FOUND`)."},
+        409: {
+            "description": (
+                "This channel has a dedicated connection endpoint (`CHANNEL_NEEDS_SETUP_ROUTE`)."
+            )
+        },
     },
 )
 async def configure_channel(
@@ -166,6 +184,16 @@ async def configure_channel(
     payload: ConfigureChannelRequest,
     service: ServiceDep,
 ) -> ApiResponse[ChannelConfigResponse]:
+    if channel_type is ChannelType.WHATSAPP:
+        # Refused rather than accepted-and-ignored. WhatsApp credentials are validated on the way
+        # in and the connection issues a verify token; letting this route write an unchecked blob
+        # would produce a connection that looks saved and can never receive a webhook.
+        raise ConflictException(
+            "Configure WhatsApp through PUT /agents/{agentId}/channels/whatsapp, which validates "
+            "the credentials and issues your webhook URL and verify token.",
+            code="CHANNEL_NEEDS_SETUP_ROUTE",
+        )
+
     config = await service.configure(
         agent_id,
         channel_type,

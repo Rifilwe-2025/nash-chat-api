@@ -20,6 +20,12 @@ from src.modules.api_keys.presentation.api import router as api_keys_router
 from src.modules.auth.presentation.api import router as auth_router
 from src.modules.channels.presentation.api import router as channels_router
 from src.modules.channels.web.presentation.api import router as web_chat_router
+from src.modules.channels.whatsapp.presentation.api import (
+    connection_router as whatsapp_connection_router,
+)
+from src.modules.channels.whatsapp.presentation.api import (
+    webhook_router as whatsapp_webhook_router,
+)
 from src.modules.conversations.presentation.api import router as conversations_router
 from src.modules.knowledge_base.presentation.api import router as knowledge_base_router
 from src.modules.system.presentation.api import router as system_router
@@ -71,6 +77,12 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_base_router)
     app.include_router(conversations_router)
     app.include_router(api_keys_router)
+    # WhatsApp before the generic channel router: `PUT /agents/{id}/channels/{channel_type}` also
+    # matches `/agents/{id}/channels/whatsapp`, and FastAPI takes the first route that matches. The
+    # generic route refuses WhatsApp anyway, so a future reordering fails loudly rather than
+    # quietly storing a connection with no credentials.
+    app.include_router(whatsapp_connection_router)
+    app.include_router(whatsapp_webhook_router)
     app.include_router(channels_router)
     app.include_router(web_chat_router)
 

@@ -25,7 +25,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 7** — Conversation engine & prompt assembly · `feat/conversation-engine`
 - [x] **Phase 8** — Web chat API, API keys & integration docs · `feat/web-channel-and-api-keys`
 - [x] **Phase 9** — Async workers, scheduled sync & API-as-source · `feat/workers-and-scheduled-sync`
-- [ ] **Phase 10** — WhatsApp channel · `feat/whatsapp-channel`
+- [x] **Phase 10** — WhatsApp channel · `feat/whatsapp-channel`
 - [ ] **Phase 11** — Agent tools: live API calls · `feat/agent-tools`
 - [ ] **Phase 12** — Analytics, logs & observability · `feat/analytics-and-observability`
 - [ ] **Phase 13** — Hardening & v1 release readiness · `chore/v1-hardening`
@@ -434,7 +434,7 @@ alert instead of failing silently.
 
 ## Phase 10 — WhatsApp channel
 
-- [ ] **Complete** · **Branch:** `feat/whatsapp-channel`
+- [x] **Complete** · **Branch:** `feat/whatsapp-channel`
 **Depends on:** Phases 8 and 9
 
 **Delivers**

@@ -170,6 +170,54 @@ logs.
 """
 
 
+def _whatsapp(base_url: str, connection_id: str, phone_number_id: str) -> str:
+    """Setup steps for a connected WhatsApp number (spec §5.5, "setup steps in the docs").
+
+    Written out rather than generated from the schema because the hard part is not the endpoint
+    shapes — it is the order of operations in *Meta's* console, which our schema knows nothing
+    about. Get the order wrong and the verification handshake fails with no useful message.
+    """
+    webhook = f"{base_url}/v1/channels/whatsapp/webhook/{connection_id}"
+    return f"""## WhatsApp
+
+This agent is connected to WhatsApp Business number `{phone_number_id}`. Finish the setup in your
+Meta app under **WhatsApp -> Configuration**:
+
+| Field | Value |
+|---|---|
+| Callback URL | `{webhook}` |
+| Verify token | Shown when you save the connection. Re-save it to see the token again. |
+
+Click **Verify and save**. Meta calls the callback URL immediately and the subscription only
+succeeds if the token matches. Then **Manage** the webhook fields and subscribe to `messages` —
+without it, nothing is delivered and everything looks connected.
+
+**Every delivery is verified.** We check `X-Hub-Signature-256` against your app secret and reject
+anything that does not match, so an app secret that is wrong or missing means an agent that never
+answers. That is deliberate: the callback URL is not a secret.
+
+**Duplicates are handled for you.** WhatsApp redelivers a webhook whenever it does not see a prompt
+`200`. A message it has already delivered is recognised by its `wamid` and ignored, so a redelivery
+never produces a second reply.
+
+### The 24-hour window
+
+WhatsApp only delivers **free-form** messages within 24 hours of the customer's last message to you.
+Replies to an inbound message are always inside it. Sending on your own initiative may not be:
+
+- `GET /agents/{{agentId}}/channels/whatsapp/sessions/{{contactId}}` tells you whether the window is
+  open and how long is left.
+- `POST /agents/{{agentId}}/channels/whatsapp/messages` sends `text` inside the window. Outside it,
+  your connection's `outsideWindowTemplate` is sent instead — and with no template configured the
+  send is refused with `WHATSAPP_WINDOW_CLOSED` rather than silently dropped.
+- Templates must be approved by Meta before they can be sent. Create them in WhatsApp Manager, then
+  name one on the connection.
+
+`GET /agents/{{agentId}}/channels/whatsapp/messages` is the delivery log: both directions, with
+`sent` / `delivered` / `read` / `failed` and WhatsApp's own reason on anything that failed.
+"""
+
+
 def build(
     *,
     agent_name: str,
@@ -180,11 +228,21 @@ def build(
     rate_limit: int,
     signature_header: str,
     schema: dict[str, Any],
+    whatsapp_connection_id: str | None = None,
+    whatsapp_phone_number_id: str | None = None,
 ) -> str:
     """Render the integration guide for one agent as Markdown."""
     endpoints = "\n".join(
         f"### `{route['method']} {route['path']}`\n\n{route['summary']}\n\n{route['description']}\n"
         for route in _routes(schema)
+    )
+
+    # Only for an agent that actually has a number connected: setup steps for a channel a tenant has
+    # not enabled would be noise in a document whose whole value is that it is specific to them.
+    whatsapp = (
+        _whatsapp(base_url, whatsapp_connection_id, whatsapp_phone_number_id or "your number")
+        if whatsapp_connection_id
+        else ""
     )
 
     return "\n".join(
@@ -199,6 +257,7 @@ def build(
             ESCALATION,
             _limits(rate_limit),
             _webhooks(signature_header),
+            whatsapp,
             ERRORS,
             "## Endpoints",
             "",

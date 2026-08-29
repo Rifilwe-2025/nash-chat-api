@@ -107,6 +107,22 @@ webhooks:
   # Signing secrets are generated per endpoint; this is the header the signature travels in.
   signature_header: "${WEBHOOK_SIGNATURE_HEADER:X-Nash-Signature} | str"
 
+whatsapp:
+  # Meta Cloud API. A different provider (Twilio, 360dialog) is a second adapter behind the same
+  # interface in `channels/whatsapp/internal/providers/`, selected per connection — not a fork here.
+  api_base_url: "${WHATSAPP_API_BASE_URL:https://graph.facebook.com} | str"
+  api_version: "${WHATSAPP_API_VERSION:v21.0} | str"
+  request_timeout_seconds: "${WHATSAPP_REQUEST_TIMEOUT_SECONDS:15} | float"
+  # WhatsApp's customer service window (spec §5.5, §6). Free-form messages are only allowed within
+  # this many hours of the contact's last inbound message; outside it, only templates are delivered.
+  session_window_hours: "${WHATSAPP_SESSION_WINDOW_HOURS:24} | int"
+  # Largest inbound media the platform will download and read. WhatsApp's own cap is 16 MB for
+  # video and 100 MB for documents; this is ours, applied before any bytes are extracted.
+  max_media_bytes: "${WHATSAPP_MAX_MEDIA_BYTES:16777216} | int"
+  # Public origin the webhook URL is built from, for the setup steps a tenant pastes into Meta.
+  # Empty falls back to the origin of the request that asked for them.
+  public_base_url: "${WHATSAPP_PUBLIC_BASE_URL:} | str"
+
 docs:
   enabled: "${DOCS_ENABLED:true} | bool"
   swagger_path: "${DOCS_SWAGGER_PATH:/docs} | str"
