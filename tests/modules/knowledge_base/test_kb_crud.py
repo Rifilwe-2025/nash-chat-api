@@ -9,23 +9,28 @@ from httpx import AsyncClient
 from tests.modules.knowledge_base.helpers import create_kb, headers, upload_ok
 
 
-async def test_create_starts_empty_on_the_direct_tier(client: AsyncClient) -> None:
+async def test_create_starts_empty_on_the_automatic_tier(client: AsyncClient) -> None:
+    """`auto` rather than a pinned tier: the right one depends on how much a tenant uploads, and
+    that changes over the life of a knowledge base without anyone revisiting the setting."""
     auth = await headers(client)
 
     knowledge_base = await create_kb(client, auth, description="Paint ranges and prices.")
 
-    assert knowledge_base["retrievalTier"] == "direct"
+    assert knowledge_base["retrievalTier"] == "auto"
     assert knowledge_base["sourceCount"] == 0
     assert knowledge_base["agentCount"] == 0
     assert knowledge_base["description"] == "Paint ranges and prices."
 
 
-async def test_the_keyword_tier_can_be_chosen_at_creation(client: AsyncClient) -> None:
+async def test_a_tier_can_be_pinned_at_creation(client: AsyncClient) -> None:
+    """The manual override: a tenant who knows better than the size heuristic."""
     auth = await headers(client)
 
-    knowledge_base = await create_kb(client, auth, retrievalTier="keyword")
+    keyword = await create_kb(client, auth, name="Pinned search", retrievalTier="keyword")
+    direct = await create_kb(client, auth, name="Pinned injection", retrievalTier="direct")
 
-    assert knowledge_base["retrievalTier"] == "keyword"
+    assert keyword["retrievalTier"] == "keyword"
+    assert direct["retrievalTier"] == "direct"
 
 
 async def test_the_vector_tier_is_not_selectable_in_v1(client: AsyncClient) -> None:

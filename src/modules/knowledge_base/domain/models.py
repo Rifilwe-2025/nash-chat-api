@@ -19,21 +19,36 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, String, Text, UniqueConstraint, Uuid
-from sqlalchemy import Enum as SqlEnum
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import (
+    BigInteger,
+    Computed,
+    DateTime,
+    ForeignKey,
+    Index,
+    String,
+    Text,
+    UniqueConstraint,
+    Uuid,
+)
+from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.shared.database.base_model import BaseModel, TenantScopedModel
+from src.shared.database.base_model import BaseModel, TenantScopedModel, enum_column
 
 
 class RetrievalTier(str, enum.Enum):
     """How this KB's content reaches the prompt (spec §5.2.2).
 
+    ``AUTO`` is the default and the one most tenants should stay on: the tier is chosen per query
+    from how much text the knowledge base actually holds, so a KB that grows past what can be
+    injected starts being searched instead, with no configuration change. ``DIRECT`` and
+    ``KEYWORD`` pin the choice for a tenant who knows better than the heuristic.
+
     ``vector`` is a v2 tier and deliberately absent: adding the value before the pipeline exists
     would let a tenant select a tier that silently does nothing.
     """
 
+    AUTO = "auto"
     DIRECT = "direct"
     KEYWORD = "keyword"
 
@@ -74,10 +89,10 @@ class KnowledgeBase(TenantScopedModel):
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
     retrieval_tier: Mapped[RetrievalTier] = mapped_column(
-        SqlEnum(RetrievalTier, name="retrieval_tier", native_enum=False, length=32),
+        enum_column(RetrievalTier, "retrieval_tier"),
         nullable=False,
-        default=RetrievalTier.DIRECT,
-        server_default=RetrievalTier.DIRECT.value,
+        default=RetrievalTier.AUTO,
+        server_default=RetrievalTier.AUTO.value,
     )
 
     sources: Mapped[list[KbSource]] = relationship(
@@ -100,6 +115,7 @@ class KbSource(TenantScopedModel):
     """
 
     __tablename__ = "kb_source"
+    __table_args__ = (Index("ix_kb_source_search_vector", "search_vector", postgresql_using="gin"),)
 
     kb_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
@@ -109,11 +125,11 @@ class KbSource(TenantScopedModel):
     )
     name: Mapped[str] = mapped_column(String(500), nullable=False)
     type: Mapped[SourceType] = mapped_column(
-        SqlEnum(SourceType, name="kb_source_type", native_enum=False, length=32),
+        enum_column(SourceType, "kb_source_type"),
         nullable=False,
     )
     status: Mapped[SourceStatus] = mapped_column(
-        SqlEnum(SourceStatus, name="kb_source_status", native_enum=False, length=32),
+        enum_column(SourceStatus, "kb_source_status"),
         nullable=False,
         default=SourceStatus.PENDING,
         server_default=SourceStatus.PENDING.value,
@@ -132,6 +148,24 @@ class KbSource(TenantScopedModel):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     source_updated_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+
+    # Tier 2's index (spec §5.2.2). A generated column rather than a trigger or an application
+    # write: Postgres recomputes it whenever the text changes, so the index cannot drift out of
+    # step with ``extracted_text``. The source name is weighted above the body so a query naming a
+    # document ranks that document first.
+    #
+    # This is **not** chunking. There is one vector per source, over the text already stored; the
+    # relevant passage is cut out at query time by ``ts_headline``. No ``kb_chunk`` table, no
+    # embeddings — that remains v2 (§5.2.4).
+    search_vector: Mapped[str | None] = mapped_column(
+        TSVECTOR,
+        Computed(
+            "setweight(to_tsvector('english', coalesce(name, '')), 'A') || "
+            "setweight(to_tsvector('english', coalesce(extracted_text, '')), 'B')",
+            persisted=True,
+        ),
+        nullable=True,
     )
 
     knowledge_base: Mapped[KnowledgeBase] = relationship(back_populates="sources")

@@ -48,6 +48,14 @@ knowledge_base:
   extraction_provider: "${KB_EXTRACTION_PROVIDER:gemini} | str"
   extraction_model: "${KB_EXTRACTION_MODEL:gemini-2.0-flash} | str"
   extraction_max_tokens: "${KB_EXTRACTION_MAX_TOKENS:8192} | int"
+  # Retrieval (spec §5.2.2). The injection budget is the smaller of a flat cap and a fraction of
+  # the agent model's context window — a million-token window is no reason to spend a million
+  # tokens of it on knowledge every turn.
+  direct_injection_max_chars: "${KB_DIRECT_INJECTION_MAX_CHARS:48000} | int"
+  context_budget_fraction: "${KB_CONTEXT_BUDGET_FRACTION:0.25} | float"
+  keyword_top_n: "${KB_KEYWORD_TOP_N:5} | int"
+  # Below this ts_rank_cd score a match is noise; retrieval reports "no relevant context" instead.
+  keyword_min_rank: "${KB_KEYWORD_MIN_RANK:0.02} | float"
 
 auth:
   # Override JWT_SECRET_KEY in every deployed environment — the default is for local use only.

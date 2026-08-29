@@ -21,7 +21,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 3** — Agent CRUD, configuration & versioning · `feat/agent-crud`
 - [x] **Phase 4** — LLM provider abstraction · `feat/llm-provider-abstraction`
 - [x] **Phase 5** — Knowledge base: model, sources & extraction · `feat/kb-ingestion`
-- [ ] **Phase 6** — Retrieval: Tier 1 injection + Tier 2 keyword search · `feat/kb-retrieval-tiers`
+- [x] **Phase 6** — Retrieval: Tier 1 injection + Tier 2 keyword search · `feat/kb-retrieval-tiers`
 - [ ] **Phase 7** — Conversation engine & prompt assembly · `feat/conversation-engine`
 - [ ] **Phase 8** — Web chat API, API keys & integration docs · `feat/web-channel-and-api-keys`
 - [ ] **Phase 9** — Async workers, scheduled sync & API-as-source · `feat/workers-and-scheduled-sync`
@@ -331,7 +331,7 @@ two agents.
 
 ## Phase 6 — Retrieval: Tier 1 direct injection + Tier 2 keyword search
 
-- [ ] **Complete** · **Branch:** `feat/kb-retrieval-tiers`
+- [x] **Complete** · **Branch:** `feat/kb-retrieval-tiers`
 **Depends on:** Phase 5
 
 **Delivers**

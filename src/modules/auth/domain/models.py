@@ -12,10 +12,9 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, String, Uuid
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy.orm import Mapped, mapped_column
 
-from src.shared.database.base_model import BaseModel
+from src.shared.database.base_model import BaseModel, enum_column
 
 
 class TokenType(str, enum.Enum):
@@ -34,7 +33,7 @@ class Token(BaseModel):
     )
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     token_type: Mapped[TokenType] = mapped_column(
-        SqlEnum(TokenType, name="token_type", native_enum=False, length=16),
+        enum_column(TokenType, "token_type", length=16),
         nullable=False,
     )
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

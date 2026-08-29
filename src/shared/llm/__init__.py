@@ -10,6 +10,7 @@ from src.shared.llm.base import (
     ToolCall,
     ToolDefinition,
 )
+from src.shared.llm.context import context_characters, context_tokens
 from src.shared.llm.errors import (
     LLMAuthenticationError,
     LLMBadRequestError,
@@ -41,5 +42,7 @@ __all__ = [
     "TokenUsage",
     "ToolCall",
     "ToolDefinition",
+    "context_characters",
+    "context_tokens",
     "get_provider",
 ]
