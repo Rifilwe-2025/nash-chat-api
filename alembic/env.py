@@ -29,6 +29,7 @@ from src.modules.channels.whatsapp.domain import (  # noqa: F401
 from src.modules.conversations.domain import models as conversation_models  # noqa: F401
 from src.modules.knowledge_base.domain import models as kb_models  # noqa: F401
 from src.modules.tenants.domain import models as tenant_models  # noqa: F401
+from src.modules.tools.domain import models as tool_models  # noqa: F401
 from src.shared.database.base_model import Base
 
 config = context.config

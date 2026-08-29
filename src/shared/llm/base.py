@@ -20,8 +20,17 @@ from typing import Any
 
 
 class Role(str, enum.Enum):
+    """Who is speaking.
+
+    ``TOOL`` is not a participant — it is the *result* of a call the assistant asked for, handed
+    back so the model can answer with it. Every provider models this differently (Claude puts a
+    ``tool_result`` block in a user turn, OpenAI has a ``tool`` role, Gemini a ``function_response``
+    part), which is precisely why it is one role here and each adapter's problem there.
+    """
+
     USER = "user"
     ASSISTANT = "assistant"
+    TOOL = "tool"
 
 
 class AttachmentKind(str, enum.Enum):
@@ -59,17 +68,13 @@ class MediaAttachment:
 
 
 @dataclass(frozen=True, slots=True)
-class ChatMessage:
-    """One conversational turn. The system prompt is passed separately, not as a message."""
-
-    role: Role
-    content: str
-    attachments: Sequence[MediaAttachment] = ()
-
-
-@dataclass(frozen=True, slots=True)
 class ToolDefinition:
-    """A tool the model may call. Execution is Phase 11 — this is the shape only."""
+    """A tool the model may call, described so it can decide when to (spec §5.2.1).
+
+    ``parameters`` is JSON Schema. Every provider accepts that shape for function declarations, so
+    it is passed through rather than translated — converting it into each SDK's own schema type
+    would lose fidelity for no gain.
+    """
 
     name: str
     description: str
@@ -78,9 +83,41 @@ class ToolDefinition:
 
 @dataclass(frozen=True, slots=True)
 class ToolCall:
+    """The model asking for a tool to be run.
+
+    ``id`` is how the result is matched back to the request. Gemini has no call id of its own and
+    its adapter substitutes the tool name, which is why nothing may assume ids are unique across a
+    conversation — only within the turn they belong to.
+    """
+
     id: str
     name: str
     arguments: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ChatMessage:
+    """One conversational turn. The system prompt is passed separately, not as a message.
+
+    Three of the fields exist only for tool calling, and only one combination of them is meaningful
+    at a time:
+
+    * an **assistant** turn carries ``tool_calls`` when the model asked for a tool instead of (or as
+      well as) answering. It must be replayed to the model, because a tool result with no record of
+      the request it answers is rejected by every provider.
+    * a **tool** turn carries ``tool_call_id`` and ``tool_name``, and its ``content`` is what the
+      tool returned, already rendered as text.
+
+    ``content`` is routinely empty on an assistant turn that only made a call — that is a normal
+    response, not a failed one.
+    """
+
+    role: Role
+    content: str
+    attachments: Sequence[MediaAttachment] = ()
+    tool_calls: Sequence[ToolCall] = ()
+    tool_call_id: str | None = None
+    tool_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

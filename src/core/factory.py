@@ -30,6 +30,7 @@ from src.modules.conversations.presentation.api import router as conversations_r
 from src.modules.knowledge_base.presentation.api import router as knowledge_base_router
 from src.modules.system.presentation.api import router as system_router
 from src.modules.tenants.presentation.api import router as account_router
+from src.modules.tools.presentation.api import router as tools_router
 from src.shared.exceptions import register_error_handlers
 
 
@@ -76,6 +77,7 @@ def create_app() -> FastAPI:
     app.include_router(agents_router)
     app.include_router(knowledge_base_router)
     app.include_router(conversations_router)
+    app.include_router(tools_router)
     app.include_router(api_keys_router)
     # WhatsApp before the generic channel router: `PUT /agents/{id}/channels/{channel_type}` also
     # matches `/agents/{id}/channels/whatsapp`, and FastAPI takes the first route that matches. The

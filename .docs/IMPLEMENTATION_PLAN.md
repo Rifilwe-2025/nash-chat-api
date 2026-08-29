@@ -26,7 +26,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 8** — Web chat API, API keys & integration docs · `feat/web-channel-and-api-keys`
 - [x] **Phase 9** — Async workers, scheduled sync & API-as-source · `feat/workers-and-scheduled-sync`
 - [x] **Phase 10** — WhatsApp channel · `feat/whatsapp-channel`
-- [ ] **Phase 11** — Agent tools: live API calls · `feat/agent-tools`
+- [x] **Phase 11** — Agent tools: live API calls · `feat/agent-tools`
 - [ ] **Phase 12** — Analytics, logs & observability · `feat/analytics-and-observability`
 - [ ] **Phase 13** — Hardening & v1 release readiness · `chore/v1-hardening`
 - [ ] **Phase 14** *(v1.1)* — Plan limits & usage metering · `feat/usage-metering`
@@ -456,7 +456,7 @@ exactly one reply, and a message outside the 24-hour window correctly falls back
 
 ## Phase 11 — Agent tools: live API calls (Pattern A)
 
-- [ ] **Complete** · **Branch:** `feat/agent-tools`
+- [x] **Complete** · **Branch:** `feat/agent-tools`
 **Depends on:** Phases 7 and 9
 
 **Delivers**

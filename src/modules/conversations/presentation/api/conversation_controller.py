@@ -24,6 +24,7 @@ from src.modules.conversations.presentation.dtos.conversation import (
     citations_of,
 )
 from src.modules.tenants.presentation.dependencies import CurrentTenantDep
+from src.modules.tools.presentation.dependencies import ToolCacheDep
 from src.shared.database.dependencies import SessionDep
 from src.shared.database.pagination import PageParamsDep
 from src.shared.responses import ApiResponse, PaginatedResponse, create_router
@@ -32,10 +33,10 @@ router = create_router(prefix="/conversations", tags=["conversations"])
 
 
 def get_conversation_service(
-    session: SessionDep, tenant_id: CurrentTenantDep
+    session: SessionDep, tenant_id: CurrentTenantDep, tool_cache: ToolCacheDep
 ) -> ConversationService:
     """The tenant comes from the token, so every query below is scoped before it is written."""
-    return ConversationService(session, tenant_id)
+    return ConversationService(session, tenant_id, tool_cache=tool_cache)
 
 
 ServiceDep = Annotated[ConversationService, Depends(get_conversation_service)]

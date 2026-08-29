@@ -35,8 +35,9 @@ from src.shared.llm.errors import (
 
 DEFAULT_MODEL = "gemini-2.0-flash"
 
-# Gemini calls the assistant "model".
-_ROLE_MAP = {Role.USER: "user", Role.ASSISTANT: "model"}
+# Gemini calls the assistant "model", and a tool result arrives as a user turn carrying a
+# `function_response` part — there is no separate tool role.
+_ROLE_MAP = {Role.USER: "user", Role.ASSISTANT: "model", Role.TOOL: "user"}
 
 
 def _parts(message: ChatMessage) -> list[dict[str, Any]]:
@@ -45,7 +46,31 @@ def _parts(message: ChatMessage) -> list[dict[str, Any]]:
     The bytes are passed through raw rather than base64-encoded: the SDK encodes ``Blob.data``
     itself, and handing it an already-encoded string would double-encode the file.
     """
-    parts: list[dict[str, Any]] = [
+    if message.role is Role.TOOL:
+        # Gemini matches a response to its call by *name*, not by an id — which is why the adapter
+        # uses the tool name as the call id when parsing one out, so the two halves agree.
+        return [
+            {
+                "function_response": {
+                    "name": message.tool_name or message.tool_call_id or "",
+                    "response": {"result": message.content},
+                }
+            }
+        ]
+
+    if message.tool_calls:
+        # The call has to be replayed with its response. Text is included only when the model said
+        # something alongside calling, since Gemini rejects an empty text part.
+        parts: list[dict[str, Any]] = []
+        if message.content:
+            parts.append({"text": message.content})
+        parts.extend(
+            {"function_call": {"name": call.name, "args": call.arguments}}
+            for call in message.tool_calls
+        )
+        return parts
+
+    parts = [
         {"inline_data": {"mime_type": attachment.media_type, "data": attachment.data}}
         for attachment in message.attachments
     ]

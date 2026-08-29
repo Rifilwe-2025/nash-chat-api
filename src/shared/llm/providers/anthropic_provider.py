@@ -23,6 +23,7 @@ from src.shared.llm.base import (
     CompletionRequest,
     CompletionResult,
     LLMProvider,
+    Role,
     TokenUsage,
     ToolCall,
 )
@@ -50,6 +51,34 @@ def accepts_temperature(model: str) -> bool:
 
 def _content(message: ChatMessage) -> Any:
     """A plain string when there is nothing attached, so ordinary turns keep the simple shape."""
+    if message.role is Role.TOOL:
+        # Claude has no tool role: a result is a `tool_result` block inside a *user* turn, matched
+        # to the request by `tool_use_id`. The role swap happens in `_message` below.
+        return [
+            {
+                "type": "tool_result",
+                "tool_use_id": message.tool_call_id or "",
+                "content": message.content,
+            }
+        ]
+
+    if message.tool_calls:
+        # The request has to be replayed alongside its result, or the API rejects the pair. A text
+        # block is included only when the model actually said something as well as calling.
+        requested: list[dict[str, Any]] = []
+        if message.content:
+            requested.append({"type": "text", "text": message.content})
+        requested.extend(
+            {
+                "type": "tool_use",
+                "id": call.id,
+                "name": call.name,
+                "input": call.arguments,
+            }
+            for call in message.tool_calls
+        )
+        return requested
+
     if not message.attachments:
         return message.content
 
@@ -67,6 +96,16 @@ def _content(message: ChatMessage) -> Any:
     # The instruction goes last: Claude reads the files first and then the ask about them.
     blocks.append({"type": "text", "text": message.content})
     return blocks
+
+
+def _message(message: ChatMessage) -> dict[str, Any]:
+    """One message in Claude's shape.
+
+    A tool result is sent as a user turn, because that is where Claude expects ``tool_result``
+    blocks — the only place this adapter rewrites a role rather than passing it through.
+    """
+    role = "user" if message.role is Role.TOOL else message.role.value
+    return {"role": role, "content": _content(message)}
 
 
 @contextmanager
@@ -115,10 +154,7 @@ class AnthropicProvider(LLMProvider):
         payload: dict[str, Any] = {
             "model": model,
             "max_tokens": request.max_tokens,
-            "messages": [
-                {"role": message.role.value, "content": _content(message)}
-                for message in request.messages
-            ],
+            "messages": [_message(message) for message in request.messages],
         }
         if request.system:
             payload["system"] = request.system

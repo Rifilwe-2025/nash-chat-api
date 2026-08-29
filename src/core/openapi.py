@@ -104,6 +104,16 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "tools",
+        "description": (
+            "Live API calls an agent can make while answering — an order status, a booking, "
+            "current stock. The model decides when to call one from the tool's description, the "
+            "platform runs it server-side with your credentials, and only the mapped result "
+            "reaches the model. A per-agent allowlist bounds which hosts can be reached at all, "
+            "and every call is logged with its arguments, latency and outcome."
+        ),
+    },
+    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "

@@ -25,6 +25,7 @@ from src.modules.api_keys.domain.models import ApiKeyScope
 from src.modules.api_keys.domain.services import ApiKeyService, AuthenticatedKey
 from src.modules.channels.domain.services import ChannelService
 from src.modules.conversations.domain.services import ConversationService
+from src.modules.tools.presentation.dependencies import ToolCacheDep
 from src.shared.database.dependencies import SessionDep
 from src.shared.exceptions import RateLimitedException, UnauthorizedException
 
@@ -105,13 +106,15 @@ ChatWriteDep = Annotated[AuthenticatedKey, Depends(require_chat_write)]
 ChatReadDep = Annotated[AuthenticatedKey, Depends(require_chat_read)]
 
 
-def get_chat_conversations(session: SessionDep, caller: ApiCallerDep) -> ConversationService:
+def get_chat_conversations(
+    session: SessionDep, caller: ApiCallerDep, tool_cache: ToolCacheDep
+) -> ConversationService:
     """The conversation engine, scoped to the tenant the key belongs to.
 
     A dependency rather than a constructor call inside each route: the tenant is derived from the
     key in exactly one place, and tests can substitute a provider without patching anything.
     """
-    return ConversationService(session, caller.tenant_id)
+    return ConversationService(session, caller.tenant_id, tool_cache=tool_cache)
 
 
 def get_chat_channels(session: SessionDep, caller: ApiCallerDep) -> ChannelService:
