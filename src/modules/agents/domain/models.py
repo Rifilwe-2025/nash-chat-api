@@ -16,12 +16,11 @@ import enum
 import uuid
 from typing import Any
 
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.shared.database.base_model import BaseModel, TenantScopedModel
+from src.shared.database.base_model import BaseModel, TenantScopedModel, enum_column
 
 
 class AgentStatus(str, enum.Enum):
@@ -50,14 +49,14 @@ class Agent(TenantScopedModel):
         JSONB, nullable=False, default=dict, server_default="{}"
     )
     model_provider: Mapped[ModelProvider | None] = mapped_column(
-        SqlEnum(ModelProvider, name="model_provider", native_enum=False, length=32),
+        enum_column(ModelProvider, "model_provider"),
         nullable=True,
     )
     model_config_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
     status: Mapped[AgentStatus] = mapped_column(
-        SqlEnum(AgentStatus, name="agent_status", native_enum=False, length=32),
+        enum_column(AgentStatus, "agent_status"),
         nullable=False,
         default=AgentStatus.DRAFT,
         server_default=AgentStatus.DRAFT.value,

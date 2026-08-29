@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import enum
 
-from sqlalchemy import Enum as SqlEnum
 from sqlalchemy import String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from src.shared.database.base_model import BaseModel, TenantScopedModel
+from src.shared.database.base_model import BaseModel, TenantScopedModel, enum_column
 
 
 class TenantPlan(str, enum.Enum):
@@ -32,7 +31,7 @@ class Tenant(BaseModel):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     plan: Mapped[TenantPlan] = mapped_column(
-        SqlEnum(TenantPlan, name="tenant_plan", native_enum=False, length=32),
+        enum_column(TenantPlan, "tenant_plan"),
         nullable=False,
         default=TenantPlan.FREE,
         server_default=TenantPlan.FREE.value,
@@ -55,7 +54,7 @@ class User(TenantScopedModel):
     full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     role: Mapped[UserRole] = mapped_column(
-        SqlEnum(UserRole, name="user_role", native_enum=False, length=32),
+        enum_column(UserRole, "user_role"),
         nullable=False,
         default=UserRole.OWNER,
         server_default=UserRole.OWNER.value,
