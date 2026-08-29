@@ -57,6 +57,17 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "conversations",
+        "description": (
+            "Talking to an agent, and the record of what was said. A turn retrieves knowledge, "
+            "assembles a prompt, calls the agent's model, and stores both sides with the tokens "
+            "and cost it used. Guardrails are applied before the model is called: an escalation "
+            "trigger hands the conversation to a human, and a restricted topic is declined "
+            "outright. Retrieved knowledge and user messages reach the model as data, never as "
+            "instructions."
+        ),
+    },
+    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "

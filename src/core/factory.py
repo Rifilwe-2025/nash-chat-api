@@ -17,6 +17,7 @@ from src.core.middleware import RequestContextMiddleware
 from src.core.openapi import API_DESCRIPTION, TAGS_METADATA
 from src.modules.agents.presentation.api import router as agents_router
 from src.modules.auth.presentation.api import router as auth_router
+from src.modules.conversations.presentation.api import router as conversations_router
 from src.modules.knowledge_base.presentation.api import router as knowledge_base_router
 from src.modules.system.presentation.api import router as system_router
 from src.modules.tenants.presentation.api import router as account_router
@@ -65,5 +66,6 @@ def create_app() -> FastAPI:
     app.include_router(account_router)
     app.include_router(agents_router)
     app.include_router(knowledge_base_router)
+    app.include_router(conversations_router)
 
     return app
