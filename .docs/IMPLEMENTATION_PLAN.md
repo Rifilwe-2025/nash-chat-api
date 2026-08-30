@@ -29,7 +29,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 11** — Agent tools: live API calls · `feat/agent-tools`
 - [x] **Phase 12** — Analytics, logs & observability · `feat/analytics-and-observability`
 - [x] **Phase 13** — Hardening & v1 release readiness · `chore/v1-hardening`
-- [ ] **Phase 14** *(v1.1)* — Plan limits & usage metering · `feat/usage-metering`
+- [x] **Phase 14** *(v1.1)* — Plan limits & usage metering · `feat/usage-metering`
 
 ---
 
@@ -526,7 +526,7 @@ traffic using only the documented steps.
 
 ## Phase 14 (v1.1) — Plan limits & usage metering
 
-- [ ] **Complete** · **Branch:** `feat/usage-metering`
+- [x] **Complete** · **Branch:** `feat/usage-metering`
 **Depends on:** Phase 12
 
 `src/modules/billing/`: per-plan quotas (agents, messages, storage), enforcement on the request path,
