@@ -28,7 +28,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 10** — WhatsApp channel · `feat/whatsapp-channel`
 - [x] **Phase 11** — Agent tools: live API calls · `feat/agent-tools`
 - [x] **Phase 12** — Analytics, logs & observability · `feat/analytics-and-observability`
-- [ ] **Phase 13** — Hardening & v1 release readiness · `chore/v1-hardening`
+- [x] **Phase 13** — Hardening & v1 release readiness · `chore/v1-hardening`
 - [ ] **Phase 14** *(v1.1)* — Plan limits & usage metering · `feat/usage-metering`
 
 ---
@@ -501,7 +501,7 @@ the stored message rows, and every failure class above is queryable through the 
 
 ## Phase 13 — Hardening & v1 release readiness
 
-- [ ] **Complete** · **Branch:** `chore/v1-hardening`
+- [x] **Complete** · **Branch:** `chore/v1-hardening`
 **Depends on:** all previous phases
 
 **Delivers**

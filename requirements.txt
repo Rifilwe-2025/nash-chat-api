@@ -1,5 +1,5 @@
 # Runtime
-fastapi==0.121.1
+fastapi==0.141.1
 uvicorn[standard]==0.34.0
 sqlalchemy[asyncio]==2.0.36
 alembic==1.14.0
@@ -7,14 +7,16 @@ asyncpg==0.30.0
 psycopg[binary]==3.2.3
 pydantic==2.12.5
 PyYAML==6.0.2
-python-multipart==0.0.20
-PyJWT==2.10.1
+python-multipart==0.0.32
+PyJWT==2.13.0
 argon2-cffi==23.1.0
 email-validator==2.2.0
 redis==5.2.1
 celery[redis]==5.4.0
 slowapi==0.1.9
 httpx==0.28.1
+# Encryption at rest for tenant-provided credentials (spec §5.7) — AES-GCM from `hazmat`.
+cryptography==50.0.1
 
 # Knowledge base extraction (spec §5.2.3). No PDF or OCR library: the model reads those natively.
 python-docx==1.1.2
@@ -26,9 +28,11 @@ openai==3.5.0
 google-genai==2.20.0
 
 # Development / CI
-pytest==8.3.4
-pytest-asyncio==0.25.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
 ruff==0.8.6
 mypy==1.14.1
+# Dependency audit (Phase 13). Run `pip-audit -r requirements.txt` — CI runs it on every PR.
+pip-audit==2.10.1
 types-PyYAML==6.0.12.20241230
 types-beautifulsoup4==4.12.0.20250204

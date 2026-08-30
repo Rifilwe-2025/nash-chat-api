@@ -44,6 +44,22 @@ class CreateKnowledgeBaseRequest(CamelModel):
         ),
         examples=["auto"],
     )
+    redact_pii: bool = Field(
+        default=False,
+        description=(
+            "Strip personal details from documents **as they are ingested**: email addresses, "
+            "phone numbers, and Luhn-valid payment card numbers are replaced with labelled "
+            "placeholders before the text is stored, so the raw values never reach the database, "
+            "a prompt, or an answer.\n\n"
+            "**This is lossy, and off by default for that reason.** A knowledge base of customer "
+            "order contacts stops being able to answer once the phone numbers are placeholders. "
+            "Detection is pattern-based: it finds the shapes it knows and will not find a name, an "
+            "address, or an identifier in a format it has never seen — a reduction in exposure, "
+            "not a guarantee of anonymity.\n\n"
+            "Applies to sources added from now on. Existing sources keep the text they were "
+            "stored with until they are re-synced or re-uploaded."
+        ),
+    )
 
 
 class UpdateKnowledgeBaseRequest(CamelModel):
@@ -52,6 +68,13 @@ class UpdateKnowledgeBaseRequest(CamelModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     description: str | None = Field(default=None, max_length=2000)
     retrieval_tier: RetrievalTier | None = None
+    redact_pii: bool | None = Field(
+        default=None,
+        description=(
+            "Turning this on affects sources added or re-synced afterwards; text already stored "
+            "is left as it is."
+        ),
+    )
 
 
 class AddUrlSourceRequest(CamelModel):
@@ -177,6 +200,9 @@ class KnowledgeBaseResponse(CamelModel):
     name: str
     description: str
     retrieval_tier: RetrievalTier
+    redact_pii: bool = Field(
+        default=False, description="Whether ingested text has personal details stripped (§5.7)."
+    )
     source_count: int = Field(description="Sources in this knowledge base.", examples=[4])
     agent_count: int = Field(description="Agents it is attached to.", examples=[2])
     created_at: datetime

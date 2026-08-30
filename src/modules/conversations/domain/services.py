@@ -51,8 +51,7 @@ from src.modules.conversations.internal.history.trimming import (
 from src.modules.conversations.internal.locking import lock_conversation
 from src.modules.conversations.internal.prompt.assembly import AgentPrompt, build_system_prompt
 from src.modules.conversations.internal.prompt.delimiters import fence_user_message
-from src.modules.knowledge_base.domain.services import KnowledgeBaseService
-from src.modules.knowledge_base.internal.retrieval import RetrievalResult
+from src.modules.knowledge_base.domain.services import KnowledgeBaseService, RetrievalResult
 from src.modules.tools.domain.services import ResponseCache, ToolResult, ToolService
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import ConflictException, NotFoundException, ValidationException

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.core.error_catalogue import render as render_error_catalogue
+
 API_DESCRIPTION = """
 Backend for a multi-tenant platform for building, configuring, and deploying custom AI chat agents.
 
@@ -23,7 +25,14 @@ Backend for a multi-tenant platform for building, configuring, and deploying cus
 
 **Request tracing** — every response carries an `X-Request-ID` header. Send your own to have it
 echoed back, and quote it when reporting a problem.
+
+**Rate limits** — responses under a limit carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and
+`X-RateLimit-Reset`; a 429 adds `Retry-After`. The public chat API is limited per API key; sign-up,
+sign-in and token refresh are limited per client address.
+
 """
+
+API_DESCRIPTION += render_error_catalogue()
 
 TAGS_METADATA: list[dict[str, Any]] = [
     {

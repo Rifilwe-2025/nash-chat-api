@@ -70,7 +70,9 @@ knowledge_base:
 
 auth:
   # Override JWT_SECRET_KEY in every deployed environment — the default is for local use only.
-  jwt_secret: "${JWT_SECRET_KEY:local-development-secret-change-me} | str"
+  # At least 32 bytes: below that, HS256 is signing with less entropy than the digest it produces
+  # (RFC 7518 §3.2), and PyJWT warns about it.
+  jwt_secret: "${JWT_SECRET_KEY:local-development-secret-change-me-please-32b} | str"
   jwt_algorithm: "${JWT_ALGORITHM:HS256} | str"
   access_ttl_minutes: "${ACCESS_TOKEN_TTL_MINUTES:15} | int"
   refresh_ttl_days: "${REFRESH_TOKEN_TTL_DAYS:14} | int"
@@ -124,6 +126,16 @@ observability:
   # publishing its request counts to whoever asks.
   operator_token: "${OBSERVABILITY_OPERATOR_TOKEN:} | str"
 
+security:
+  # Encryption at rest for tenant-provided credentials (spec §5.7): WhatsApp tokens, tool API keys,
+  # webhook signing secrets. 32 bytes, base64. Generate one with
+  #   python -c "from src.shared.crypto import generate_key; print(generate_key())"
+  # Empty disables encryption and the application says so at startup outside local environments —
+  # a key invented per process would produce data nobody could decrypt after a restart.
+  encryption_key: "${SECURITY_ENCRYPTION_KEY:} | str"
+  # Strict-Transport-Security, sent only over HTTPS. A year, which is what preload lists require.
+  hsts_max_age_seconds: "${SECURITY_HSTS_MAX_AGE_SECONDS:31536000} | int"
+
 rate_limit:
   # "redis" is required in any deployment with more than one worker — the in-memory backend counts
   # per process, so the limit a tenant was sold would be multiplied by the worker count.
@@ -131,6 +143,9 @@ rate_limit:
   # Default requests per minute for a new API key, when the caller does not set one.
   default_per_minute: "${RATE_LIMIT_DEFAULT_PER_MINUTE:60} | int"
   max_per_minute: "${RATE_LIMIT_MAX_PER_MINUTE:6000} | int"
+  # Attempts per minute per client address on signup, login and refresh — the endpoints reachable
+  # with no credential at all. Set above what a person does by hand, below what a script does.
+  auth_per_minute: "${RATE_LIMIT_AUTH_PER_MINUTE:20} | int"
 
 webhooks:
   timeout_seconds: "${WEBHOOK_TIMEOUT_SECONDS:5} | float"

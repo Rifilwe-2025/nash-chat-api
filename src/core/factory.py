@@ -15,6 +15,7 @@ from src import configs
 from src.core.lifespan import lifespan
 from src.core.middleware import RequestContextMiddleware
 from src.core.openapi import API_DESCRIPTION, TAGS_METADATA
+from src.core.security_headers import SecurityHeadersMiddleware
 from src.modules.agents.presentation.api import router as agents_router
 from src.modules.analytics.presentation.api import router as analytics_router
 from src.modules.api_keys.presentation.api import router as api_keys_router
@@ -61,6 +62,9 @@ def create_app() -> FastAPI:
         swagger_ui_parameters={"persistAuthorization": True, "displayRequestDuration": True},
     )
 
+    # Outermost, so the headers are on every response — including the ones the error handlers
+    # produce and the ones the CORS middleware answers by itself.
+    app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(
         CORSMiddleware,

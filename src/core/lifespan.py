@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from src import configs
 from src.core.rate_limit import build_limiter
 from src.modules.tools.internal.cache import ResponseCache
+from src.shared.crypto import warn_if_unprotected
 from src.shared.database.engine import create_engine, create_session_factory
 
 logger = logging.getLogger("api.lifespan")
@@ -29,6 +30,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         configs.APP_VERSION,
         configs.APP_ENV,
     )
+
+    # Says so loudly when tenant credentials are being written in clear (spec §5.7). At startup
+    # rather than on first use: an operator should learn this from the boot log, not from a
+    # database dump.
+    warn_if_unprotected()
 
     engine = create_engine()
     app.state.engine = engine

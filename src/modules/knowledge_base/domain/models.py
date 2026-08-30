@@ -21,6 +21,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Computed,
     DateTime,
     ForeignKey,
@@ -98,6 +99,12 @@ class KnowledgeBase(TenantScopedModel):
         default=RetrievalTier.AUTO,
         server_default=RetrievalTier.AUTO.value,
     )
+    # Opt-in PII redaction (spec §5.7). Off by default because redaction is lossy: a knowledge base
+    # of customer order contacts stops being able to answer once the phone numbers are placeholders.
+    # Applied at ingestion, so the redacted form is what is stored — see `internal/redaction.py`.
+    redact_pii: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     sources: Mapped[list[KbSource]] = relationship(
         back_populates="knowledge_base",
@@ -119,7 +126,13 @@ class KbSource(TenantScopedModel):
     """
 
     __tablename__ = "kb_source"
-    __table_args__ = (Index("ix_kb_source_search_vector", "search_vector", postgresql_using="gin"),)
+    __table_args__ = (
+        Index("ix_kb_source_search_vector", "search_vector", postgresql_using="gin"),
+        # The source list, newest first, per knowledge base.
+        Index("ix_kb_source_kb_created", "kb_id", "created_at"),
+        # The failure report reads a tenant's failed sources (spec §5.8).
+        Index("ix_kb_source_tenant_status", "tenant_id", "status"),
+    )
 
     kb_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),

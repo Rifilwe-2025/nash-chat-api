@@ -6,8 +6,10 @@ the web channel using it, so the WhatsApp adapter has somewhere to live that is 
 
 ``credentials_json`` is where a channel's secrets go. They are stored, not hashed, because the
 platform has to *present* them to the channel — the same reason a webhook signing secret is stored
-in clear. Encryption at rest is a §5.7 concern for hardening (Phase 13), noted rather than faked
-here: pretending a JSON column is secure would be worse than being plain about what it is.
+rather than digested. Both are encrypted at rest through the column types in
+:mod:`src.shared.crypto.types` (Phase 13, §5.7), so the ciphertext never passes through a service
+and no code path can forget to apply it. With no key configured — local development, the test
+suite — the columns hold what they always held, and the application says so at startup.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, 
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from src.shared.crypto import EncryptedJson, EncryptedString
 from src.shared.database.base_model import TenantScopedModel, enum_column
 
 
@@ -73,7 +76,7 @@ class ChannelConfig(TenantScopedModel):
         server_default=ChannelStatus.ACTIVE.value,
     )
     credentials_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default="{}"
+        EncryptedJson, nullable=False, default=dict, server_default="{}"
     )
     settings_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
@@ -98,7 +101,10 @@ class WebhookEndpoint(TenantScopedModel):
         doc="Restrict deliveries to one agent. Null means every agent in the tenant.",
     )
     url: Mapped[str] = mapped_column(String(2000), nullable=False)
-    secret: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Wide enough for the ciphertext, not for the secret: encryption adds a nonce, a tag and base64
+    # to every value, and a column sized for the plaintext would start truncating on the day the
+    # key was turned on.
+    secret: Mapped[str] = mapped_column(EncryptedString(512), nullable=False)
     events: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     status: Mapped[WebhookStatus] = mapped_column(
         enum_column(WebhookStatus, "webhook_status"),

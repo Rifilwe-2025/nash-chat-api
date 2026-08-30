@@ -21,7 +21,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -42,6 +42,9 @@ class ApiKey(TenantScopedModel):
     """One integration credential, bound to a single agent (spec §7)."""
 
     __tablename__ = "api_key"
+    # A tenant's key list is filtered by agent; the unique index on the hash serves authentication
+    # and nothing else.
+    __table_args__ = (Index("ix_api_key_tenant_agent", "tenant_id", "agent_id"),)
 
     agent_id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
