@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import Depends
 
 from src.modules.auth.domain.services import AuthService, TokenPair
+from src.modules.auth.presentation.dependencies import CredentialThrottleDep
 from src.modules.auth.presentation.dtos.auth import (
     AuthenticatedResponse,
     LoginRequest,
@@ -68,10 +69,17 @@ def _authenticated(user: User, tokens: TokenPair) -> AuthenticatedResponse:
         201: {"description": "The tenant and its owner were created."},
         409: {"description": "That email is already registered (`EMAIL_TAKEN`)."},
         422: {"description": "The payload failed validation (`VALIDATION_ERROR`)."},
+        429: {
+            "description": (
+                "Too many attempts from this address in the last minute (`RATE_LIMITED`). The "
+                "`X-RateLimit-*` headers on every response say how much allowance is left, and "
+                "`Retry-After` says when to come back."
+            )
+        },
     },
 )
 async def signup(
-    payload: SignupRequest, service: AuthServiceDep
+    payload: SignupRequest, service: AuthServiceDep, _: CredentialThrottleDep
 ) -> ApiResponse[AuthenticatedResponse]:
     user, tokens = await service.signup(
         email=payload.email,
@@ -93,10 +101,17 @@ async def signup(
     responses={
         200: {"description": "Signed in."},
         401: {"description": "Email or password is incorrect (`INVALID_CREDENTIALS`)."},
+        429: {
+            "description": (
+                "Too many attempts from this address in the last minute (`RATE_LIMITED`). The "
+                "`X-RateLimit-*` headers on every response say how much allowance is left, and "
+                "`Retry-After` says when to come back."
+            )
+        },
     },
 )
 async def login(
-    payload: LoginRequest, service: AuthServiceDep
+    payload: LoginRequest, service: AuthServiceDep, _: CredentialThrottleDep
 ) -> ApiResponse[AuthenticatedResponse]:
     user, tokens = await service.login(email=payload.email, password=payload.password)
     return ApiResponse.ok(_authenticated(user, tokens))
@@ -119,10 +134,17 @@ async def login(
                 "(`INVALID_TOKEN`, `TOKEN_REVOKED`)."
             )
         },
+        429: {
+            "description": (
+                "Too many attempts from this address in the last minute (`RATE_LIMITED`). The "
+                "`X-RateLimit-*` headers on every response say how much allowance is left, and "
+                "`Retry-After` says when to come back."
+            )
+        },
     },
 )
 async def refresh(
-    payload: RefreshRequest, service: AuthServiceDep
+    payload: RefreshRequest, service: AuthServiceDep, _: CredentialThrottleDep
 ) -> ApiResponse[AuthenticatedResponse]:
     user, tokens = await service.refresh(payload.refresh_token)
     return ApiResponse.ok(_authenticated(user, tokens))
