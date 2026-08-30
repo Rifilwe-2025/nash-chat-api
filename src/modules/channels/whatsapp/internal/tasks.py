@@ -37,6 +37,7 @@ from src.modules.channels.whatsapp.internal.providers.base import (
     WhatsAppProvider,
 )
 from src.modules.conversations.domain.services import ConversationService
+from src.modules.tenants.domain.services import TenantService
 
 logger = logging.getLogger("api.channels.whatsapp.tasks")
 
@@ -121,6 +122,15 @@ async def process_inbound(
     connection = await resolve_connection(session, connection_id)
     if connection is None:
         logger.info("whatsapp connection %s no longer exists; dropping message", connection_id)
+        return None
+
+    # The third path an agent can serve on, and the only one that reaches no sign-in and no API key
+    # — so the account check that the other two get for free has to be made here.
+    tenant = await TenantService(session).get_tenant(connection.tenant_id)
+    if not tenant.is_active:
+        logger.info(
+            "tenant %s is disabled; not answering whatsapp message %s", tenant.id, record_id
+        )
         return None
 
     record = await session.get(WhatsAppMessage, record_id)

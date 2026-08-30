@@ -27,6 +27,7 @@ from src.modules.agents.domain.services import AgentService
 from src.modules.api_keys.domain.models import DEFAULT_SCOPES, ApiKey, ApiKeyScope
 from src.modules.api_keys.domain.repositories import ApiKeyRepository, authenticate
 from src.modules.api_keys.internal.key_generator import GeneratedKey, generate_key, hash_key
+from src.modules.tenants.domain.services import TenantService
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import (
     ForbiddenException,
@@ -149,6 +150,15 @@ class ApiKeyService:
         if api_key is None or not api_key.is_active:
             raise UnauthorizedException(
                 "The API key is missing, invalid, or revoked.", code="INVALID_API_KEY"
+            )
+
+        # The account itself, before the agent: a disabled tenant's agents stop answering on every
+        # channel, and a key is the one credential that never passes through the user sign-in path
+        # where that is otherwise enforced.
+        tenant = await TenantService(session).get_tenant(api_key.tenant_id)
+        if not tenant.is_active:
+            raise ForbiddenException(
+                "This account is not currently active.", code="ACCOUNT_DISABLED"
             )
 
         agent = await AgentService(session, api_key.tenant_id).get(api_key.agent_id)

@@ -29,7 +29,7 @@ from src.modules.auth.internal.token_cleanup import purge_dead_tokens
 from src.modules.auth.internal.token_provider import TokenError
 from src.modules.tenants.domain.models import User
 from src.modules.tenants.domain.services import TenantService
-from src.shared.exceptions import ConflictException, UnauthorizedException
+from src.shared.exceptions import ConflictException, ForbiddenException, UnauthorizedException
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +88,11 @@ class AuthService:
                 "Email or password is incorrect.", code="INVALID_CREDENTIALS"
             )
 
+        # After the password check, never before: refusing a disabled account earlier would tell an
+        # attacker which addresses have accounts, which is the thing the constant-time check above
+        # exists to hide.
+        self._assert_account_enabled(user)
+
         if user.password_hash and needs_rehash(user.password_hash):
             user.password_hash = hash_password(password)
 
@@ -121,7 +126,29 @@ class AuthService:
         if stored.user_id != user.id:
             raise UnauthorizedException("Token does not match its subject.", code="INVALID_TOKEN")
 
+        # Checked on every request rather than only at sign-in, so disabling an account takes effect
+        # immediately instead of whenever the holder's access token happens to expire.
+        self._assert_account_enabled(user)
+
         return AuthenticatedUser(user=user, tenant_id=user.tenant_id)
+
+    @staticmethod
+    def _assert_account_enabled(user: User) -> None:
+        """Refuse a user whose tenant has been disabled.
+
+        Platform staff are exempt. They are the people who re-enable an account, and locking them
+        out of the tool that does it — because somebody disabled the tenant they happen to belong
+        to — would be a door that can only be opened from inside.
+
+        The message names no reason. Why an account was disabled is a note for whoever disabled it,
+        not a line the account holder gets to read back.
+        """
+        if user.is_platform_admin or user.tenant.is_active:
+            return
+        raise ForbiddenException(
+            "This account has been disabled. Contact support to have it restored.",
+            code="ACCOUNT_DISABLED",
+        )
 
     # -- internals -----------------------------------------------------------
 
