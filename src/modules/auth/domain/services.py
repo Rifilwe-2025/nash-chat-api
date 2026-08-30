@@ -27,8 +27,8 @@ from src.modules.auth.internal.password_hasher import (
 )
 from src.modules.auth.internal.token_cleanup import purge_dead_tokens
 from src.modules.auth.internal.token_provider import TokenError
-from src.modules.tenants.domain.models import Tenant, User, UserRole
-from src.modules.tenants.domain.repositories import TenantRepository, UserRepository
+from src.modules.tenants.domain.models import User
+from src.modules.tenants.domain.services import TenantService
 from src.shared.exceptions import ConflictException, UnauthorizedException
 
 
@@ -49,8 +49,10 @@ class AuthService:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.tokens = TokenRepository(session)
-        self.users = UserRepository(session)
-        self.tenants = TenantRepository(session)
+        # Service to service: auth owns passwords, tokens and sessions; the tenant and user rows
+        # belong to the tenants module, and are reached through its service rather than its
+        # repositories (the layering rule in CLAUDE.md).
+        self.accounts = TenantService(session)
 
     # -- registration and sign-in -------------------------------------------
 
@@ -62,25 +64,21 @@ class AuthService:
         full_name: str | None = None,
     ) -> tuple[User, TokenPair]:
         """Create the tenant and its first user together — a user cannot exist without a tenant."""
-        if await self.users.email_exists(email):
+        if await self.accounts.email_taken(email):
             raise ConflictException(
                 "An account with that email already exists.", code="EMAIL_TAKEN"
             )
 
-        tenant = await self.tenants.add(Tenant(name=tenant_name))
-        user = await self.users.add(
-            User(
-                tenant_id=tenant.id,
-                email=email.lower(),
-                full_name=full_name,
-                password_hash=hash_password(password),
-                role=UserRole.OWNER,
-            )
+        _, user = await self.accounts.register(
+            tenant_name=tenant_name,
+            email=email,
+            password_hash=hash_password(password),
+            full_name=full_name,
         )
         return user, await self._issue_pair(user)
 
     async def login(self, email: str, password: str) -> tuple[User, TokenPair]:
-        user = await self.users.get_by_email(email)
+        user = await self.accounts.find_by_email(email)
 
         # Verify even when the user is missing, so a wrong email and a wrong password cost the
         # same time and cannot be told apart by an attacker enumerating accounts.
@@ -167,7 +165,7 @@ class AuthService:
         return stored
 
     async def _load_user(self, user_id: uuid.UUID) -> User:
-        user = await self.users.get(user_id)
+        user = await self.accounts.find_user(user_id)
         if user is None:
             raise UnauthorizedException("Account no longer exists.", code="INVALID_TOKEN")
         return user
