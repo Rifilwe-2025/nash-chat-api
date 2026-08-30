@@ -103,7 +103,21 @@ a disabled account cannot sign in, its API keys are refused, and its agents answ
 without anything being deleted. To read or change what is *inside* an account, an administrator
 sends `X-Tenant-Id: <id>` on the ordinary endpoints and they answer as though signed in to it.
 
-The flag is granted out of band, never through the API:
+**The first administrator** comes from the environment. Set both values before the first boot and
+the account is created at startup, once:
+
+```bash
+ADMIN_BOOTSTRAP_EMAIL=admin@example.com
+ADMIN_BOOTSTRAP_PASSWORD=change-me-on-first-login   # at least 12 characters
+```
+
+That password is a *handover*, not a credential — it sits in a file everyone with deploy access can
+read — so the account is created having to change it. It can sign in and call `POST /auth/password`,
+and every other endpoint answers `403 PASSWORD_CHANGE_REQUIRED` until it has. The API warns on every
+boot while that is still true. Nothing is ever reset by a restart: if the address already exists,
+the bootstrap does nothing at all.
+
+Granting the flag to somebody who already has an account, or taking it away:
 
 ```bash
 python scripts/grant_platform_admin.py ada@example.com     # --revoke to take it away, --list to see who has it

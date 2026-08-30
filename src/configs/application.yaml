@@ -126,6 +126,21 @@ observability:
   # publishing its request counts to whoever asks.
   operator_token: "${OBSERVABILITY_OPERATOR_TOKEN:} | str"
 
+admin:
+  # The first platform administrator, created at startup when both an email and a password are set
+  # and no user already has that address. Leave either empty and nothing is seeded — a deployment
+  # that has not asked for an admin does not get one.
+  #
+  # The password here is a *handover* password, not a credential: it sits in an environment file
+  # that everyone with deploy access can read, so the account is created having to change it before
+  # it can do anything, and the API says so at startup until it has been changed.
+  bootstrap_email: "${ADMIN_BOOTSTRAP_EMAIL:} | str"
+  bootstrap_password: "${ADMIN_BOOTSTRAP_PASSWORD:} | str"
+  bootstrap_name: "${ADMIN_BOOTSTRAP_NAME:Platform Administrator} | str"
+  # The tenant the administrator's own user belongs to. Every user belongs to one, including staff;
+  # theirs exists so they have somewhere to be, not because anybody works in it.
+  bootstrap_tenant_name: "${ADMIN_BOOTSTRAP_TENANT_NAME:Platform} | str"
+
 security:
   # Encryption at rest for tenant-provided credentials (spec §5.7): WhatsApp tokens, tool API keys,
   # webhook signing secrets. 32 bytes, base64. Generate one with

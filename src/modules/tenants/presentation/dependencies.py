@@ -15,6 +15,12 @@ admin-only mirror of each module's routes, and no unscoped query anywhere: the r
 still tenant-scoped, the admin has simply chosen which tenant they are scoped to. One function
 decides it, so there is one thing to audit rather than a hundred.
 
+**An account that must change its password can do nothing else.** The check sits on
+:func:`get_current_user` and :func:`get_current_tenant_id` — the two dependencies every protected
+route resolves — and not on :data:`AuthenticatedDep`, which is what the password-change endpoint
+depends on. So the one route that clears the flag is reachable and the rest are not, without any
+route having to opt in or remember.
+
 **For everybody else the header does nothing at all.** It is ignored rather than refused: refusing
 would confirm which tenant ids exist, and a header any caller can set must never be able to widen a
 caller's scope. Every use of it *is* logged, admin or not — one line for the audit trail, one line
@@ -34,7 +40,7 @@ from src.modules.auth.domain.services import AuthenticatedUser, AuthService
 from src.modules.tenants.domain.models import User
 from src.modules.tenants.domain.services import TenantService
 from src.shared.database.dependencies import SessionDep
-from src.shared.exceptions import UnauthorizedException
+from src.shared.exceptions import ForbiddenException, UnauthorizedException
 
 logger = logging.getLogger("api.tenants.scope")
 
@@ -66,7 +72,23 @@ async def get_authenticated(session: SessionDep, credentials: CredentialsDep) ->
 AuthenticatedDep = Annotated[AuthenticatedUser, Depends(get_authenticated)]
 
 
+def _assert_password_changed(user: User) -> None:
+    """Refuse an account still on a password somebody else chose.
+
+    A `403` rather than a `401`: the credential is valid and the caller is who they say they are —
+    there is simply one thing they have to do first, and the code says which.
+    """
+    if not user.must_change_password:
+        return
+    raise ForbiddenException(
+        "This account must change its password before it can be used. "
+        "Send the current and new password to POST /auth/password.",
+        code="PASSWORD_CHANGE_REQUIRED",
+    )
+
+
 async def get_current_user(authenticated: AuthenticatedDep) -> User:
+    _assert_password_changed(authenticated.user)
     return authenticated.user
 
 
@@ -81,6 +103,8 @@ async def get_current_tenant_id(
     tenant must exist, which is checked through the tenants service so a bad id is the same 404 it
     is everywhere else.
     """
+    _assert_password_changed(authenticated.user)
+
     if acting_as is None or acting_as == authenticated.tenant_id:
         return authenticated.tenant_id
 

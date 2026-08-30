@@ -15,6 +15,14 @@ from fastapi import FastAPI
 
 from src import configs
 from src.core.rate_limit import build_limiter
+
+# Reaching into a module's `internal/` from a composition root, as `worker.py` does for its tasks:
+# startup wiring is where a module's machinery is hooked up, and the alternative — a public service
+# method that only the application factory may call — would be a wider surface, not a smaller one.
+from src.modules.admin.internal.bootstrap import (
+    ensure_bootstrap_admin,
+    warn_if_handover_password_unchanged,
+)
 from src.modules.tools.internal.cache import ResponseCache
 from src.shared.crypto import warn_if_unprotected
 from src.shared.database.engine import create_engine, create_session_factory
@@ -46,6 +54,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # One tool-response cache per process, so a repeated identical lookup within a few seconds
     # is not paid for twice. In-process on purpose — see tools/internal/cache.py.
     app.state.tool_cache = ResponseCache()
+
+    # The first platform administrator, from the environment. Idempotent — it only ever creates —
+    # and it never stops the API from starting, because a deployment with no administrator is a
+    # thing to fix while one that will not boot is an outage.
+    async with app.state.session_factory() as session:
+        await ensure_bootstrap_admin(session)
+        await warn_if_handover_password_unchanged(session)
 
     try:
         yield

@@ -41,6 +41,10 @@ AUTHENTICATION = {
     "OPERATOR_TOKEN_INVALID": "`X-Operator-Token` is missing or wrong on an operator route.",
     "PLATFORM_ADMIN_REQUIRED": "The caller is signed in but is not platform staff.",
     "ACCOUNT_DISABLED": "The account is disabled: nobody in it can sign in and no agent serves.",
+    "PASSWORD_CHANGE_REQUIRED": (
+        "The account must change its password before it can do anything else. Call "
+        "`POST /auth/password`."
+    ),
     "METRICS_DISABLED": "No operator token is configured, so operator metrics are closed.",
 }
 
@@ -62,6 +66,7 @@ REQUEST = {
     "EMPTY_MESSAGE": "A chat message cannot be blank.",
     "MESSAGE_TOO_LONG": "The message is longer than the configured maximum.",
     "AGENT_NAME_TAKEN": "Another agent in your tenant already has that name.",
+    "PASSWORD_UNCHANGED": "The new password is the same as the current one.",
     "KB_NAME_TAKEN": "Another knowledge base in your tenant already has that name.",
     "TOOL_NAME_TAKEN": "That agent already has a tool with that name.",
     "TENANT_CONFIRMATION_MISMATCH": "Deleting an account requires confirming its exact name.",

@@ -44,12 +44,42 @@ class RefreshRequest(CamelModel):
     )
 
 
+class ChangePasswordRequest(CamelModel):
+    current_password: str = Field(
+        description=(
+            "Your current password. Required even though you are signed in: an access token can be "
+            "borrowed, and knowing the password is the evidence that you are its owner."
+        )
+    )
+    new_password: str = Field(
+        min_length=PASSWORD_MIN_LENGTH,
+        max_length=128,
+        description=(
+            f"At least {PASSWORD_MIN_LENGTH} characters, and different from the current one."
+        ),
+        examples=["a-much-better-passphrase"],
+    )
+
+
 class UserResponse(CamelModel):
     id: uuid.UUID
     email: str
     full_name: str | None
     role: str
     tenant_id: uuid.UUID
+    is_platform_admin: bool = Field(
+        default=False,
+        description="Platform staff. Granted by the deployment, never through this API.",
+    )
+    must_change_password: bool = Field(
+        default=False,
+        description=(
+            "**True means the account can do nothing but change its password.** Set on an account "
+            "whose password was chosen by somebody else — the administrator a deployment creates "
+            "from its environment. Every other endpoint answers `403 PASSWORD_CHANGE_REQUIRED` "
+            "until `POST /auth/password` has been called."
+        ),
+    )
 
 
 class TenantResponse(CamelModel):
