@@ -81,14 +81,6 @@ REQUEST = {
     "ANALYTICS_WINDOW_TOO_LONG": "The reporting window is longer than the configured maximum.",
 }
 
-PLAN = {
-    "PLAN_LIMIT_EXCEEDED": (
-        "Your plan's limit for agents, monthly messages or stored knowledge is reached. "
-        "`error.detail` says which one and by how much. Returned as `402`, not `429`: waiting "
-        "does not help, the account needs a larger plan."
-    ),
-}
-
 STATE = {
     "AGENT_NOT_PUBLISHED": "The agent is a draft or paused, so it does not serve traffic.",
     "AGENT_NOT_PUBLISHABLE": "Something required for publishing is missing. The detail lists it.",
@@ -143,12 +135,6 @@ GROUPS: list[tuple[str, str, dict[str, str]]] = [
         "The request is well-formed but the resource is not in a state that allows it. Change the "
         "configuration or the status first.",
         STATE,
-    ),
-    (
-        "Plan limits",
-        "The request is legitimate and the caller is permitted; the account's plan does not allow "
-        "it. See `GET /billing/plan` for what is used and what is allowed.",
-        PLAN,
     ),
     (
         "Transient and server-side",

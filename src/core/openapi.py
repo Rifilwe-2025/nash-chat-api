@@ -135,16 +135,6 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
-        "name": "billing",
-        "description": (
-            "Your plan, its limits, and what you have used against them. Agents and stored "
-            "knowledge are current state — deleting either frees what it held; messages, tokens "
-            "and estimated spend accumulate over the billing month and reset with it. Reaching a "
-            "limit returns `402 PLAN_LIMIT_EXCEEDED` naming which one. Plan changes are made out "
-            "of band: nothing here takes payment."
-        ),
-    },
-    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "

@@ -30,7 +30,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src import configs
 from src.modules.agents.domain.models import Agent, AgentStatus
 from src.modules.agents.domain.services import AgentService
-from src.modules.billing.domain.services import BillingService
 from src.modules.conversations.domain.models import (
     Channel,
     Conversation,
@@ -112,9 +111,6 @@ class ConversationService:
         # Service to service, like knowledge: the turn asks the tools module what this agent may
         # call and to run one, and never touches a tool row or the HTTP client itself.
         self.tools = ToolService(session, tenant_id, cache=tool_cache)
-        # Plan limits and metering (spec §5.9). Checked before the provider is called and metered
-        # after the reply is stored — see the two call sites in `send_message` and `_answer`.
-        self.billing = BillingService(session, tenant_id)
         self._llm = llm_client or LLMClient()
 
     # -- reads ---------------------------------------------------------------
@@ -174,10 +170,6 @@ class ConversationService:
     ) -> TurnResult:
         """Run one full turn and store both sides of it."""
         message = self._validated(content)
-        # Before anything is written or paid for. A message quota exists to bound what the platform
-        # spends on a tenant's behalf, and a limit checked after the provider has been called is an
-        # accounting note rather than a limit.
-        await self.billing.check_message_quota()
         agent = await self._agent_for_turn(agent_id, channel)
         conversation = await self._session_for(agent, channel, external_user_id, conversation_id)
 
@@ -186,11 +178,6 @@ class ConversationService:
         await lock_conversation(self.session, conversation.id)
 
         user_message = await self._store(conversation, MessageRole.USER, message)
-        # Metered here, so every turn counts once however it is answered — by the model, by an
-        # escalation, or by a restricted-topic guardrail. It rides the turn's own transaction, so a
-        # turn that fails and rolls back un-meters itself; the tokens and cost are added in
-        # `_answer`, where they are known.
-        await self.billing.meter(messages=1)
 
         decision = guardrails.evaluate(
             message,
@@ -243,13 +230,11 @@ class ConversationService:
         a free call.
         """
         message = self._validated(content)
-        await self.billing.check_message_quota()
         agent = await self._agent_for_turn(agent_id, channel)
         conversation = await self._session_for(agent, channel, external_user_id, None)
         await lock_conversation(self.session, conversation.id)
 
         user_message = await self._store(conversation, MessageRole.USER, message)
-        await self.billing.meter(messages=1)
 
         decision = guardrails.evaluate(
             message,
@@ -440,15 +425,6 @@ class ConversationService:
             citations=self._citations(retrieval),
             meta=meta,
         )
-        # The message itself was metered when it arrived; what is added here is what it cost. Kept
-        # separate so a guardrail turn — which never reaches a provider — is counted as a message
-        # and as no spend, which is exactly what happened.
-        await self.billing.meter(
-            prompt_tokens=outcome.usage.prompt_tokens,
-            completion_tokens=outcome.usage.completion_tokens,
-            cost_micro_usd=reply.cost_micro_usd or 0,
-        )
-
         return TurnResult(
             conversation, user_message, reply, retrieval=retrieval, tool_calls=outcome.calls
         )
