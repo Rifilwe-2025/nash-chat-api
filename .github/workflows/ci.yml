@@ -79,3 +79,9 @@ jobs:
 
       - name: Tests
         run: pytest
+
+      - name: Dependency audit
+        # Phase 13 (spec §5.7). Advisories arrive on their own schedule rather than with our
+        # changes, so a new one turns the next PR red — which is the point: it is noticed by
+        # whoever is already looking, instead of at the next release.
+        run: pip-audit -r requirements.txt
