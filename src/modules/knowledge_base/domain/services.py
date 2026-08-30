@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src import configs
 from src.core import queue
 from src.modules.agents.domain.services import AgentService
+from src.modules.billing.domain.services import BillingService
 from src.modules.knowledge_base.domain.models import (
     AgentKbLink,
     KbSource,
@@ -84,6 +85,8 @@ class KnowledgeBaseService:
         self.session = session
         self.tenant_id = tenant_id
         self.knowledge_bases = KnowledgeBaseRepository(session, tenant_id)
+        # Plan limits (spec §5.9). Storage is the ceiling this module can breach.
+        self.billing = BillingService(session, tenant_id)
         self.sources = KbSourceRepository(session, tenant_id)
         self.links = AgentKbLinkRepository(session)
         self.agents = AgentService(session, tenant_id)
@@ -596,8 +599,17 @@ class KnowledgeBaseService:
             ) from exc
 
     async def _assert_within_limits(self, byte_size: int) -> None:
+        """Both ceilings, in the order a tenant can act on.
+
+        The platform limits (``KB_MAX_SOURCE_BYTES``, ``KB_MAX_TENANT_BYTES``) are what this
+        deployment will hold for anybody; the plan limit is what this tenant has paid for. They are
+        separate numbers because they answer to different people — one is an operator's decision
+        about capacity, the other a product decision about pricing — and either can be the binding
+        one.
+        """
         limits.assert_within_source_limit(byte_size)
         limits.assert_within_tenant_limit(await self.sources.total_bytes(), byte_size)
+        await self.billing.check_storage_quota(byte_size)
 
     async def _require_unique_name(self, name: str, exclude_id: uuid.UUID | None = None) -> None:
         if await self.knowledge_bases.name_taken(name, exclude_id=exclude_id):
