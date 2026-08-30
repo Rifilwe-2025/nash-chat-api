@@ -26,6 +26,8 @@ from celery.exceptions import SoftTimeLimitExceeded
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.queue import celery_app, run_async
+from src.modules.analytics.domain.models import EventCategory
+from src.modules.analytics.domain.services import PlatformEventService
 from src.modules.channels.whatsapp.domain.models import DeliveryStatus, WhatsAppMessage
 from src.modules.channels.whatsapp.domain.repositories import resolve_connection
 from src.modules.channels.whatsapp.internal.providers.base import (
@@ -41,8 +43,14 @@ logger = logging.getLogger("api.channels.whatsapp.tasks")
 __all__ = [
     "process_inbound",
     "process_inbound_task",
+    "record_inbound_failure",
     "to_payload",
 ]
+
+# The error code the conversation engine raises when the model could not be reached. Matched here
+# rather than caught as a type because the engine deliberately converts provider failures into an
+# application exception at its own boundary — the code is the contract, not the class.
+PROVIDER_UNAVAILABLE = "PROVIDER_UNAVAILABLE"
 
 
 def to_payload(message: InboundMessage) -> dict[str, Any]:
@@ -168,4 +176,63 @@ def process_inbound_task(
         )
     except Exception as exc:
         logger.exception("whatsapp inbound task failed for message %s", record_id)
+
+        if self.request.retries >= self.max_retries:
+            # Last attempt. Everything it wrote was rolled back with it, so the only record that
+            # this customer went unanswered is the one written now — in a fresh session, which is
+            # the whole reason it survives (see analytics/domain/models.py).
+            #
+            # Read out of the exception before the lambda: `except ... as exc` unbinds `exc` when
+            # the block ends, so a closure over it is a name that may not be there when it runs.
+            code = str(getattr(exc, "code", type(exc).__name__))
+            detail = str(exc)
+            run_async(
+                lambda session: record_inbound_failure(
+                    session, uuid.UUID(record_id), code=code, detail=detail
+                )
+            )
+            return
+
         raise self.retry(exc=exc) from exc
+
+
+async def record_inbound_failure(
+    session: AsyncSession, record_id: uuid.UUID, code: str, detail: str
+) -> None:
+    """Leave a trace of a message that was never answered.
+
+    Two records, because they answer two different questions. The message row moves to ``failed``
+    so "what happened to this customer?" has an answer in the ledger the tenant already reads. A
+    platform event is written *as well* when the cause was the model being unreachable, because
+    "is my agent broken right now?" is a question about the provider, not about one contact — and
+    a provider outage that only showed up as scattered failed messages would take far longer to
+    recognise.
+
+    Never raises. It runs after something has already gone wrong; a recorder that failed here would
+    turn one silent failure into two.
+    """
+    try:
+        record = await session.get(WhatsAppMessage, record_id)
+        if record is None:
+            return
+
+        if record.status is DeliveryStatus.RECEIVED:
+            record.status = DeliveryStatus.FAILED
+            record.error_detail = detail[:500]
+
+        if code == PROVIDER_UNAVAILABLE:
+            await PlatformEventService(session, record.tenant_id).record(
+                EventCategory.PROVIDER_ERROR,
+                code=code,
+                detail=detail,
+                agent_id=record.agent_id,
+                meta={
+                    "channel": "whatsapp",
+                    "messageId": str(record.id),
+                    "subject": record.wa_contact_id,
+                },
+            )
+
+        await session.flush()
+    except Exception:
+        logger.exception("could not record the failure of whatsapp message %s", record_id)
