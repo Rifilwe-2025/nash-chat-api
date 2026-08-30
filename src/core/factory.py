@@ -20,6 +20,7 @@ from src.modules.agents.presentation.api import router as agents_router
 from src.modules.analytics.presentation.api import router as analytics_router
 from src.modules.api_keys.presentation.api import router as api_keys_router
 from src.modules.auth.presentation.api import router as auth_router
+from src.modules.billing.presentation.api import router as billing_router
 from src.modules.channels.presentation.api import router as channels_router
 from src.modules.channels.web.presentation.api import router as web_chat_router
 from src.modules.channels.whatsapp.presentation.api import (
@@ -85,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(tools_router)
     app.include_router(api_keys_router)
     app.include_router(analytics_router)
+    app.include_router(billing_router)
     # WhatsApp before the generic channel router: `PUT /agents/{id}/channels/{channel_type}` also
     # matches `/agents/{id}/channels/whatsapp`, and FastAPI takes the first route that matches. The
     # generic route refuses WhatsApp anyway, so a future reordering fails loudly rather than
