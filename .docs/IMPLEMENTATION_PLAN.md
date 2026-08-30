@@ -29,7 +29,8 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 11** — Agent tools: live API calls · `feat/agent-tools`
 - [x] **Phase 12** — Analytics, logs & observability · `feat/analytics-and-observability`
 - [x] **Phase 13** — Hardening & v1 release readiness · `chore/v1-hardening`
-- [x] **Phase 14** *(v1.1)* — Plan limits & usage metering · `feat/usage-metering`
+- [x] ~~**Phase 14** *(v1.1)* — Plan limits & usage metering~~ · **reverted** — the platform does not charge for use; accounts are enabled and disabled instead
+- [ ] **Phase 15** — Platform administration & account status · `feat/platform-admin`
 
 ---
 
@@ -93,7 +94,6 @@ api/
 | `channels` | 8, 10 | `channels/web/`, `channels/whatsapp/` as sub-modules sharing one message format |
 | `tools` | 11 | agent tool definitions + server-side execution |
 | `analytics` | 12 | usage, cost, logs, quality signals |
-| `billing` | 14 | plan quotas, metering hooks |
 
 The LLM provider abstraction lives in `src/shared/llm/`, not in a module — it is infrastructure used
 by several modules, the same role `src/shared/inference/` plays in `aura_api`.
@@ -524,14 +524,54 @@ traffic using only the documented steps.
 
 ---
 
-## Phase 14 (v1.1) — Plan limits & usage metering
+## Phase 14 (v1.1) — Plan limits & usage metering *(built, then reverted)*
 
-- [x] **Complete** · **Branch:** `feat/usage-metering`
+- [x] **Complete** · **Branch:** `feat/usage-metering` — **removed again in `chore/remove-billing`**
 **Depends on:** Phase 12
 
-`src/modules/billing/`: per-plan quotas (agents, messages, storage), enforcement on the request path,
-metering hooks for usage-based billing, and quota-exceeded responses. §5.9 and §6 place billing after
-the core product — **do not pull this forward** unless the maintainer asks.
+Built as specified: `src/modules/billing/` with per-plan quotas (agents, messages, storage),
+enforcement on the request path, metering counters, and `402` quota-exceeded responses.
+
+**Then removed, at the maintainer's direction: this platform does not charge for use.** §5.9's open
+question about a pricing model (§9) is answered — there is no pricing model — so the ceilings, the
+counters and the refusals had no reader. The lever over an account is instead **enabled or
+disabled**, which Phase 15 adds.
+
+What the removal kept: usage reporting is not lost, because `analytics` already counts messages,
+tokens and cost from the message rows themselves (§5.8). The one thing the counters did that
+analytics does not is survive a tenant deleting a conversation — which mattered only because an
+invoice must not change after it is sent, and there is no invoice.
+
+The revert is `alembic/versions/0014_drop_usage_counter.py` plus the removal of the module and its
+three call sites. Should charging ever arrive, this section and that migration are the record of
+what was built and why it went.
+
+---
+
+## Phase 15 — Platform administration & account status
+
+- [ ] **Complete** · **Branch:** `feat/platform-admin`
+**Depends on:** Phase 14's removal
+
+**Delivers**
+- `src/modules/admin/` — a platform-staff surface reaching across tenants, kept in its own module
+  precisely because everything else in the codebase cannot: tenant listing and search with counts,
+  one tenant's detail, and enabling or disabling an account.
+- A `status` on `tenant`. A disabled account cannot sign in and its agents stop answering on every
+  channel, without anything being deleted — the lever the platform has over an account now that it
+  does not bill for one.
+- A platform-admin flag on `user`, granted out of band by a script rather than through the API,
+  since an endpoint that grants it is an endpoint that escalates privilege.
+- **Admin CRUD without a parallel API**: an admin acts *as* a tenant by naming it in a header, which
+  the single tenant-resolution dependency honours only for admins. Every existing endpoint then
+  works unchanged and every query stays tenant-scoped — the admin only chooses which tenant.
+
+**Not in this phase:** in-tenant roles beyond owner (§2 keeps team accounts out of v1), impersonating
+a specific *user*, and any admin write path that bypasses a module's own service.
+
+**Done when:** a disabled tenant's users cannot sign in and its API keys are refused, an admin can
+disable and re-enable an account and act as any tenant through the ordinary endpoints, and a
+non-admin sending the same header is scoped to their own tenant exactly as before.
 
 ---
 
@@ -545,6 +585,7 @@ template marketplace, and advanced BI dashboards.
 ## Open questions to settle with the maintainer
 
 Carried from §9 — raise each at the phase where it first bites rather than deciding it silently:
-bring-your-own provider keys vs. platform-provided (Phase 4), pricing model (Phase 14),
+bring-your-own provider keys vs. platform-provided (Phase 4), pricing model (**settled: the
+platform does not charge — Phase 14 was reverted and accounts are enabled or disabled instead**),
 white-labeling depth (Phase 8), team accounts (Phase 2), and whether v1 truly needs tool-calling on
 day one (Phase 11).

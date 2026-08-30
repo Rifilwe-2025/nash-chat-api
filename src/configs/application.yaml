@@ -126,18 +126,6 @@ observability:
   # publishing its request counts to whoever asks.
   operator_token: "${OBSERVABILITY_OPERATOR_TOKEN:} | str"
 
-billing:
-  # Plan ceilings (spec §5.9). One plan per entry, semicolons between them; -1 is unlimited. A limit
-  # a plan does not name keeps the built-in default for that plan, so raising one ceiling does not
-  # mean restating the other two.
-  plans: "${BILLING_PLANS:} | str"
-  # Off by default, deliberately. The pricing model is spec §9's open question — still the
-  # maintainer's to settle — so enforcing ceilings nobody has agreed to would be deciding it
-  # quietly. Metering runs regardless and GET /billing/plan reports every figure, including which
-  # ceilings a tenant is over; turn this on once the plans are real.
-  enforce: "${BILLING_ENFORCE:false} | bool"
-  history_periods: "${BILLING_HISTORY_PERIODS:12} | int"
-
 security:
   # Encryption at rest for tenant-provided credentials (spec §5.7): WhatsApp tokens, tool API keys,
   # webhook signing secrets. 32 bytes, base64. Generate one with

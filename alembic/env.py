@@ -23,7 +23,6 @@ from src.modules.agents.domain import models as agent_models  # noqa: F401
 from src.modules.analytics.domain import models as analytics_models  # noqa: F401
 from src.modules.api_keys.domain import models as api_key_models  # noqa: F401
 from src.modules.auth.domain import models as auth_models  # noqa: F401
-from src.modules.billing.domain import models as billing_models  # noqa: F401
 from src.modules.channels.domain import models as channel_models  # noqa: F401
 from src.modules.channels.whatsapp.domain import (  # noqa: F401
     models as whatsapp_models,

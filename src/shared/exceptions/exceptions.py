@@ -68,21 +68,6 @@ class ConflictException(AppException):
     message = "The request conflicts with the current state."
 
 
-class PlanLimitException(AppException):
-    """The tenant's plan does not allow this (spec §5.9).
-
-    ``402 Payment Required`` rather than 403 or 429, and the distinction is one an integration acts
-    on: 403 means *this credential may never do this*, 429 means *try again shortly*, and neither is
-    true here. The request is legitimate, the caller is permitted, and waiting will not help — the
-    account needs a bigger plan. 402 is the status every billing-aware client already treats that
-    way.
-    """
-
-    status_code = HTTPStatus.PAYMENT_REQUIRED
-    code = "PLAN_LIMIT_EXCEEDED"
-    message = "Your plan's limit has been reached."
-
-
 class RateLimitedException(AppException):
     status_code = HTTPStatus.TOO_MANY_REQUESTS
     code = "RATE_LIMITED"
