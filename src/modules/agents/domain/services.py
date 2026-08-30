@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.modules.agents.domain.models import Agent, AgentStatus, AgentVersion, ModelProvider
 from src.modules.agents.domain.repositories import AgentRepository, AgentVersionRepository
 from src.modules.agents.internal.transitions import can_transition, publish_blockers
+from src.modules.billing.domain.services import BillingService
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import ConflictException, NotFoundException, ValidationException
 
@@ -24,6 +25,9 @@ class AgentService:
         self.tenant_id = tenant_id
         self.agents = AgentRepository(session, tenant_id)
         self.versions = AgentVersionRepository(session)
+        # Plan limits (spec §5.9). Service to service, and one-way: billing reads the agent *model*
+        # to count rows rather than calling back into this service, so the two do not form a cycle.
+        self.billing = BillingService(session, tenant_id)
 
     # -- reads ---------------------------------------------------------------
 
@@ -47,6 +51,9 @@ class AgentService:
         model_provider: ModelProvider | None = None,
         model_settings: dict[str, Any] | None = None,
     ) -> Agent:
+        # Before the name check rather than after: a tenant at their agent ceiling should be told
+        # about the ceiling, not about a name collision they would hit next.
+        await self.billing.check_agent_quota()
         await self._require_unique_name(name)
 
         # No snapshot here: a version row records a configuration that has been *superseded*, and
