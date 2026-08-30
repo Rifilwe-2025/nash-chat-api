@@ -80,6 +80,9 @@ class Conversation(TenantScopedModel):
             "external_user_id",
             "status",
         ),
+        # Analytics counts conversations started in a window, per tenant (spec §5.8). Without this
+        # every usage report is a sequential scan of the table.
+        Index("ix_conversation_tenant_created", "tenant_id", "created_at"),
     )
 
     agent_id: Mapped[uuid.UUID] = mapped_column(
@@ -139,6 +142,9 @@ class Message(BaseModel):
     __tablename__ = "message"
     __table_args__ = (
         UniqueConstraint("conversation_id", "sequence", name="uq_message_conversation_id_sequence"),
+        # Every analytics aggregate joins messages to their conversation and filters by time; the
+        # unique constraint above orders by sequence instead, so it cannot serve those reads.
+        Index("ix_message_conversation_created", "conversation_id", "created_at"),
     )
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
