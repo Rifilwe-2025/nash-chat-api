@@ -114,6 +114,18 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "analytics",
+        "description": (
+            "What the platform recorded: usage, cost, quality signals, and everything that "
+            "failed. Read-only — the numbers are produced by the modules that do the work, and "
+            "come straight from the stored rows, so a total here reconciles with the transcript "
+            "it was counted from. Preview traffic from the builder's test chat is excluded by "
+            "default. One route, `/analytics/operations`, reports this process's own telemetry to "
+            "whoever operates the deployment and is gated on an operator secret rather than an "
+            "access token."
+        ),
+    },
+    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "

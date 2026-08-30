@@ -25,6 +25,7 @@ from src.shared.llm.providers.anthropic_provider import AnthropicProvider
 from src.shared.llm.providers.gemini_provider import GeminiProvider
 from src.shared.llm.providers.openai_provider import OpenAIProvider
 from src.shared.llm.retry import with_retries
+from src.shared.observability import PROVIDER_CALLS, PROVIDER_DURATION, PROVIDER_ERRORS, metrics
 
 logger = logging.getLogger("api.llm")
 
@@ -90,12 +91,26 @@ class LLMClient:
         return self._build(provider, api_key).stream(request)
 
     async def _attempt(self, adapter: LLMProvider, request: CompletionRequest) -> CompletionResult:
-        return await with_retries(
-            lambda: adapter.complete(request),
-            attempts=configs.LLM_MAX_ATTEMPTS,
-            base_delay=configs.LLM_RETRY_BASE_DELAY_SECONDS,
-            max_delay=configs.LLM_RETRY_MAX_DELAY_SECONDS,
-        )
+        """One provider call, timed and counted whichever way it ends.
+
+        The measurement wraps the retries rather than each attempt, because what matters
+        operationally is how long the *caller* waited — a customer does not experience three
+        attempts, they experience one slow reply. The error counter is keyed by the exception class,
+        so "the provider is rate limiting us" and "the provider is down" stay distinguishable
+        without anyone having to read a log.
+        """
+        with metrics.timed(PROVIDER_DURATION, provider=adapter.name):
+            metrics.increment(PROVIDER_CALLS, provider=adapter.name)
+            try:
+                return await with_retries(
+                    lambda: adapter.complete(request),
+                    attempts=configs.LLM_MAX_ATTEMPTS,
+                    base_delay=configs.LLM_RETRY_BASE_DELAY_SECONDS,
+                    max_delay=configs.LLM_RETRY_MAX_DELAY_SECONDS,
+                )
+            except LLMError as exc:
+                metrics.increment(PROVIDER_ERRORS, provider=adapter.name, error=type(exc).__name__)
+                raise
 
     def _fallback_for(self, provider: str) -> str | None:
         configured = (configs.LLM_FALLBACK_PROVIDER or "").strip().lower()
