@@ -39,11 +39,14 @@ AUTHENTICATION = {
     "API_KEY_EXPIRY_IN_PAST": "A key cannot be issued already expired.",
     "INVALID_RATE_LIMIT": "The requested per-key rate limit is outside the allowed range.",
     "OPERATOR_TOKEN_INVALID": "`X-Operator-Token` is missing or wrong on an operator route.",
+    "PLATFORM_ADMIN_REQUIRED": "The caller is signed in but is not platform staff.",
+    "ACCOUNT_DISABLED": "The account is disabled: nobody in it can sign in and no agent serves.",
     "METRICS_DISABLED": "No operator token is configured, so operator metrics are closed.",
 }
 
 NOT_FOUND = {
     "AGENT_NOT_FOUND": "No such agent in your tenant.",
+    "USER_NOT_FOUND": "No account uses that email address.",
     "AGENT_VERSION_NOT_FOUND": "No such version of that agent.",
     "KB_NOT_FOUND": "No such knowledge base in your tenant.",
     "KB_SOURCE_NOT_FOUND": "No such source in that knowledge base.",
@@ -61,6 +64,7 @@ REQUEST = {
     "AGENT_NAME_TAKEN": "Another agent in your tenant already has that name.",
     "KB_NAME_TAKEN": "Another knowledge base in your tenant already has that name.",
     "TOOL_NAME_TAKEN": "That agent already has a tool with that name.",
+    "TENANT_CONFIRMATION_MISMATCH": "Deleting an account requires confirming its exact name.",
     "TOOL_NAME_INVALID": "A tool name must be a valid function name for every provider.",
     "TOOL_DESCRIPTION_TOO_SHORT": "The description is prompt text; it has to say something.",
     "TOOL_ENDPOINT_INVALID": "The endpoint is not a usable http(s) URL.",
