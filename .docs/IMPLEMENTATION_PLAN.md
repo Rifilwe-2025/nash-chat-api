@@ -561,8 +561,12 @@ what was built and why it went.
 - A `status` on `tenant`. A disabled account cannot sign in and its agents stop answering on every
   channel, without anything being deleted — the lever the platform has over an account now that it
   does not bill for one.
-- A platform-admin flag on `user`, granted out of band by a script rather than through the API,
-  since an endpoint that grants it is an endpoint that escalates privilege.
+- A platform-admin flag on `user`, granted out of band rather than through the API, since an
+  endpoint that grants it is an endpoint that escalates privilege: the first administrator is
+  created at startup from the environment, the rest by script.
+- A **forced password change** on any account whose password somebody else chose. The bootstrap
+  administrator's first password comes from a configuration file, so the account can sign in and
+  change it and do nothing else until it has.
 - **Admin CRUD without a parallel API**: an admin acts *as* a tenant by naming it in a header, which
   the single tenant-resolution dependency honours only for admins. Every existing endpoint then
   works unchanged and every query stays tenant-scoped — the admin only chooses which tenant.
