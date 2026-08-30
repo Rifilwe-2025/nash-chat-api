@@ -8,6 +8,8 @@ class ConfigError(RuntimeError): ...
 def load_config() -> dict[str, Any]: ...
 def reload() -> None: ...
 
+ANALYTICS_DEFAULT_WINDOW_DAYS: int
+ANALYTICS_MAX_WINDOW_DAYS: int
 APP_DEBUG: bool
 APP_ENV: str
 APP_NAME: str
@@ -50,6 +52,7 @@ LLM_REQUEST_TIMEOUT_SECONDS: float
 LLM_RETRY_BASE_DELAY_SECONDS: float
 LLM_RETRY_MAX_DELAY_SECONDS: float
 LOGGING_LEVEL: str
+OBSERVABILITY_OPERATOR_TOKEN: str
 QUEUE_MAX_RETRIES: int
 QUEUE_MODE: str
 QUEUE_RETRY_BACKOFF_SECONDS: int

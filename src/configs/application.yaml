@@ -111,6 +111,19 @@ tools:
   # place that should be able to reach inside the network.
   allow_private_urls: "${TOOLS_ALLOW_PRIVATE_URLS:false} | bool"
 
+analytics:
+  # Reporting window defaults and ceiling (spec §5.8). The cap is a refusal rather than a silent
+  # truncation: a five-year request is a sequential scan over the largest table in the schema, on a
+  # request path shared with everyone else.
+  default_window_days: "${ANALYTICS_DEFAULT_WINDOW_DAYS:30} | int"
+  max_window_days: "${ANALYTICS_MAX_WINDOW_DAYS:366} | int"
+
+observability:
+  # Shared secret for GET /analytics/operations, which reports process metrics across every tenant.
+  # Empty leaves the endpoint closed — a deployment that has not thought about this must not be
+  # publishing its request counts to whoever asks.
+  operator_token: "${OBSERVABILITY_OPERATOR_TOKEN:} | str"
+
 rate_limit:
   # "redis" is required in any deployment with more than one worker — the in-memory backend counts
   # per process, so the limit a tenant was sold would be multiplied by the worker count.
