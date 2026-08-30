@@ -8,6 +8,7 @@ from src.modules.auth.domain.services import AuthService, TokenPair
 from src.modules.auth.presentation.dependencies import CredentialThrottleDep
 from src.modules.auth.presentation.dtos.auth import (
     AuthenticatedResponse,
+    ChangePasswordRequest,
     LoginRequest,
     LogoutResponse,
     RefreshRequest,
@@ -16,7 +17,11 @@ from src.modules.auth.presentation.dtos.auth import (
     UserResponse,
 )
 from src.modules.tenants.domain.models import User
-from src.modules.tenants.presentation.dependencies import CredentialsDep, bearer_scheme
+from src.modules.tenants.presentation.dependencies import (
+    AuthenticatedDep,
+    CredentialsDep,
+    bearer_scheme,
+)
 from src.shared.database.dependencies import SessionDep
 from src.shared.exceptions import UnauthorizedException
 from src.shared.responses import ApiResponse, create_router
@@ -46,6 +51,8 @@ def _authenticated(user: User, tokens: TokenPair) -> AuthenticatedResponse:
             full_name=user.full_name,
             role=user.role.value,
             tenant_id=user.tenant_id,
+            is_platform_admin=user.is_platform_admin,
+            must_change_password=user.must_change_password,
         ),
         tokens=TokenPairResponse(
             access_token=tokens.access_token,
@@ -148,6 +155,44 @@ async def refresh(
 ) -> ApiResponse[AuthenticatedResponse]:
     user, tokens = await service.refresh(payload.refresh_token)
     return ApiResponse.ok(_authenticated(user, tokens))
+
+
+@router.post(
+    "/password",
+    response_model=ApiResponse[AuthenticatedResponse],
+    summary="Change your password",
+    description=(
+        "Replaces your password and returns a fresh token pair.\n\n"
+        "**Every other session ends.** Issuing a pair revokes every token held before it, which is "
+        "most of the point: a password is changed because it may be known, and the sessions that "
+        "may be using it should stop.\n\n"
+        "The current password is required even though you are signed in. An access token is a "
+        "bearer credential — a borrowed laptop, a copied header — and knowing the password is the "
+        "only evidence that the person changing it owns the account.\n\n"
+        "**This is the one endpoint an account with `mustChangePassword` can call.** The "
+        "administrator a deployment creates from its environment starts in that state, because a "
+        "password that lives in a configuration file is known to everyone who can read it. Calling "
+        "this clears the flag and the rest of the API opens up."
+    ),
+    responses={
+        200: {"description": "The password was changed; a new token pair is returned."},
+        401: {
+            "description": (
+                "The access token is invalid, or `currentPassword` is wrong "
+                "(`UNAUTHORIZED`, `INVALID_TOKEN`, `INVALID_CREDENTIALS`)."
+            )
+        },
+        409: {"description": "The new password matches the current one (`PASSWORD_UNCHANGED`)."},
+        422: {"description": "The new password is too short (`VALIDATION_ERROR`)."},
+    },
+)
+async def change_password(
+    payload: ChangePasswordRequest, service: AuthServiceDep, authenticated: AuthenticatedDep
+) -> ApiResponse[AuthenticatedResponse]:
+    user, tokens = await service.change_password(
+        authenticated.user, payload.current_password, payload.new_password
+    )
+    return ApiResponse.ok(_authenticated(user, tokens), message="Password changed.")
 
 
 @router.post(
