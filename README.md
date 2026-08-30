@@ -96,6 +96,19 @@ clear.
   `OBSERVABILITY_OPERATOR_TOKEN`. Closed when no token is configured.
 - `python scripts/smoke_load.py --url … --key …` — a load smoke test on the chat path.
 
+### Platform administration
+
+`/admin` covers the account directory, the platform totals, and enabling or disabling an account —
+a disabled account cannot sign in, its API keys are refused, and its agents answer on no channel,
+without anything being deleted. To read or change what is *inside* an account, an administrator
+sends `X-Tenant-Id: <id>` on the ordinary endpoints and they answer as though signed in to it.
+
+The flag is granted out of band, never through the API:
+
+```bash
+python scripts/grant_platform_admin.py ada@example.com     # --revoke to take it away, --list to see who has it
+```
+
 ## Development
 
 ```bash

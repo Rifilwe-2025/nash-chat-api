@@ -30,7 +30,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 12** — Analytics, logs & observability · `feat/analytics-and-observability`
 - [x] **Phase 13** — Hardening & v1 release readiness · `chore/v1-hardening`
 - [x] ~~**Phase 14** *(v1.1)* — Plan limits & usage metering~~ · **reverted** — the platform does not charge for use; accounts are enabled and disabled instead
-- [ ] **Phase 15** — Platform administration & account status · `feat/platform-admin`
+- [x] **Phase 15** — Platform administration & account status · `feat/platform-admin`
 
 ---
 
@@ -94,6 +94,7 @@ api/
 | `channels` | 8, 10 | `channels/web/`, `channels/whatsapp/` as sub-modules sharing one message format |
 | `tools` | 11 | agent tool definitions + server-side execution |
 | `analytics` | 12 | usage, cost, logs, quality signals |
+| `admin` | 15 | account directory, enable/disable, platform totals |
 
 The LLM provider abstraction lives in `src/shared/llm/`, not in a module — it is infrastructure used
 by several modules, the same role `src/shared/inference/` plays in `aura_api`.
@@ -550,7 +551,7 @@ what was built and why it went.
 
 ## Phase 15 — Platform administration & account status
 
-- [ ] **Complete** · **Branch:** `feat/platform-admin`
+- [x] **Complete** · **Branch:** `feat/platform-admin`
 **Depends on:** Phase 14's removal
 
 **Delivers**

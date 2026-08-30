@@ -148,7 +148,7 @@ pytest tests/shared/test_tenant_scoping.py tests/modules/tenants tests/modules/a
 | Key rotation tooling | The envelope carries a `v1:` version prefix and `decrypt` dispatches on it, so rotation is a `v2` branch plus a re-encrypt pass. No rotation has been needed yet and building the tooling before the first key exists would be building it blind. |
 | Object storage for uploaded originals | v1 stores extracted text, not files (§5.2.2), so the originals are only staged between the upload and the worker. A blob store is the right answer when originals must be retained, which is a v2 requirement. |
 | PII detection beyond patterns | A model-based classifier catches names and addresses that regexes cannot, at the cost of a model call per document. Recorded in the API's own description so no tenant over-trusts what is there. |
-| Team accounts / in-tenant roles | Out of scope for v1 (§9, §2). Every user is the owner of their tenant, which is why the operator metrics endpoint uses a separate secret rather than an admin role. |
+| Team accounts / in-tenant roles | Out of scope for v1 (§9, §2). Every user is still the owner of their own tenant. A *platform* admin role now exists (see below), which is a different thing: it is about the deployment, not about a tenant. |
 
 ---
 
@@ -177,6 +177,12 @@ the audit is repeated on every PR rather than being a snapshot of one afternoon:
 
 **Deviations found and kept, with reasons:**
 
+0. `admin/domain/repositories.py` reads **across tenants**, on `BaseRepository` rather than the
+   tenant-scoped base. That is the one sanctioned unscoped path in the codebase and it is confined
+   to that file: it reads `tenant` and counts of the rows hanging off one, and nothing else. An
+   administrator reaching *into* an account does it by acting as that tenant through the ordinary
+   endpoints, where the usual scoped repositories still do the work — so the cross-tenant surface is
+   "the account list and how big each account is", not "everything".
 1. `analytics/domain/repositories.py` reads other modules' models. That is what a read model is; the
    plan sanctions it, and every one of those repositories extends the tenant-scoped base so the
    isolation guarantee is inherited rather than restated.
@@ -186,6 +192,19 @@ the audit is repeated on every PR rather than being a snapshot of one afternoon:
    internal message format and one channel-settings table (§5.5); splitting them would duplicate both.
 
 ---
+
+## Platform administration and account status (Phase 15)
+
+Added after the v1 phases, replacing the plan limits that were built and removed:
+
+| Item | Status |
+|---|---|
+| Cross-tenant admin | **Done, and deliberately narrow.** `/admin` covers the account list, one account's size and people, the platform totals, and the enable/disable lever. It exposes no tenant *content*. |
+| Admin CRUD | **Done through the existing API.** An administrator sends `X-Tenant-Id` and every ordinary endpoint answers as though signed in to that account. One dependency decides it (`tenants/presentation/dependencies.py`), so there is one thing to audit rather than a parallel API per module — and every query stays tenant-scoped. Covered by `tests/modules/admin/test_platform_admin.py`. |
+| The header cannot widen anyone else's scope | **Verified.** A non-admin sending `X-Tenant-Id` is silently scoped to their own tenant — ignored rather than refused, since refusing would confirm which tenant ids exist: `::test_a_non_admin_sending_the_header_stays_in_their_own_tenant`. |
+| Granting admin | **Out of band only**, via `scripts/grant_platform_admin.py`. There is no endpoint, and a test asserts no route accepts the flag. |
+| Disabling an account | **Done, at every door**: sign-in, an already-issued access token on its next request, the account's API keys, and the WhatsApp webhook — the three paths that authenticate differently, plus the one that authenticates not at all. |
+| Reversibility | Disabling deletes nothing; re-enabling restores service with no further steps. Deletion exists separately and requires typing the account's name back. |
 
 ## From an empty database to serving traffic
 
