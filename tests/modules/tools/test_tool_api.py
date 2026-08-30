@@ -105,6 +105,39 @@ async def test_the_first_tool_seeds_the_allowlist_with_its_own_host(
     assert policy.json()["value"]["allowedHosts"] == ["api.example.com"]
 
 
+async def test_a_later_tool_does_not_widen_the_allowlist(client: AsyncClient) -> None:
+    """The failure an end-to-end run found: seeding ran on *every* create, not just the first.
+
+    The allowlist lives on the agent rather than on each tool for exactly this reason — a list that
+    grew itself whenever somebody added a tool would allow whatever the newest tool named, which is
+    not an allowlist. Adding a host stays a separate, deliberate act.
+    """
+    auth = await owner(client)
+    agent = await make_agent(client, auth)
+    await add_tool(client, auth, agent["id"])
+
+    second = await add_tool(
+        client,
+        auth,
+        agent["id"],
+        name="metadata_probe",
+        endpointUrl="http://169.254.169.254/latest/meta-data",
+    )
+    assert second.status_code == 201, second.text
+
+    policy = await client.get(f"/agents/{agent['id']}/tools/policy", headers=auth)
+    assert policy.json()["value"]["allowedHosts"] == ["api.example.com"]
+
+    ran = await client.post(
+        f"/tools/{second.json()['value']['id']}/try", json={"arguments": {}}, headers=auth
+    )
+    assert ran.json()["value"]["outcome"] == "refused"
+    assert (
+        "not on this agent" in ran.json()["value"]["resultText"]
+        or "not valid" in (ran.json()["value"]["resultText"])
+    )
+
+
 async def test_a_description_too_short_to_be_prompt_text_is_refused(
     client: AsyncClient,
 ) -> None:
