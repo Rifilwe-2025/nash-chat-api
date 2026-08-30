@@ -25,7 +25,7 @@ agent gave a bad answer" from "the tool returned bad data" is to have kept what 
 **Credentials live in ``auth_config_json`` and are never sent to the model or the client.** The
 whole security argument of Pattern A is that the platform holds the tenant's API key and injects it
 server-side (§5.2.1); a tool whose credential reached the prompt would be a credential the model
-could be talked into repeating.
+could be talked into repeating. The column encrypts itself at rest (Phase 13, §5.7).
 """
 
 from __future__ import annotations
@@ -49,6 +49,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from src.shared.crypto import EncryptedJson
 from src.shared.database.base_model import BaseModel, TenantScopedModel, enum_column
 
 
@@ -147,10 +148,10 @@ class AgentTool(TenantScopedModel):
         default=ToolAuthType.NONE,
         server_default=ToolAuthType.NONE.value,
     )
-    # The tenant's credential for their own API. Stored, not hashed — it has to be presented. Like
-    # the channel credentials, encryption at rest is Phase 13's (§5.7), noted rather than faked.
+    # The tenant's credential for their own API. Stored, not hashed — it has to be presented — and
+    # encrypted at rest by the column type (§5.7), so no service can forget to apply it.
     auth_config_json: Mapped[dict[str, Any]] = mapped_column(
-        JSONB, nullable=False, default=dict, server_default="{}"
+        EncryptedJson, nullable=False, default=dict, server_default="{}"
     )
     # JSON Schema for the arguments, handed to the provider verbatim as the function's parameters.
     request_schema_json: Mapped[dict[str, Any]] = mapped_column(
