@@ -120,6 +120,13 @@ class User(TenantScopedModel):
     is_platform_admin: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
+    # Set on an account whose password was chosen by somebody other than its owner — today that
+    # means the bootstrap administrator, whose first password comes from a deployment's environment
+    # and is therefore known to everyone who can read it. While it is set the account can sign in
+    # and change its password, and do nothing else.
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
     # Eagerly joined wherever the authentication path loads a user, so checking that their account
     # is still enabled costs no extra round trip on every request. See the repository.

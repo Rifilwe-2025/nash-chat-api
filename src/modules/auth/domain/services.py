@@ -77,6 +77,73 @@ class AuthService:
         )
         return user, await self._issue_pair(user)
 
+    async def provision_account(
+        self,
+        email: str,
+        password: str,
+        tenant_name: str,
+        full_name: str | None = None,
+        is_platform_admin: bool = False,
+        must_change_password: bool = False,
+    ) -> User:
+        """Create an account somebody *else* chose the password for.
+
+        Sign-up with no tokens issued, because nobody is signing in — this is a deployment creating
+        the first platform administrator from its environment. It lives in the auth module for one
+        reason: passwords are hashed here and nowhere else, and a caller that had to hash its own
+        would be a second place that could get it wrong.
+
+        ``must_change_password`` is the honest half of it. A password the account holder did not
+        choose is a password somebody else knows, so the account gets to change it and do nothing
+        else until it has.
+        """
+        if await self.accounts.email_taken(email):
+            raise ConflictException(
+                "An account with that email already exists.", code="EMAIL_TAKEN"
+            )
+
+        _, user = await self.accounts.register(
+            tenant_name=tenant_name,
+            email=email,
+            password_hash=hash_password(password),
+            full_name=full_name,
+            is_platform_admin=is_platform_admin,
+            must_change_password=must_change_password,
+        )
+        return user
+
+    async def change_password(
+        self, user: User, current_password: str, new_password: str
+    ) -> tuple[User, TokenPair]:
+        """Replace a password, and end every session that was using the old one.
+
+        The current password is required even though the caller is already authenticated. An access
+        token is a bearer credential — a borrowed laptop, a copied header — and knowing the password
+        is the only evidence that the person changing it is the person who owns it.
+
+        A fresh pair comes back because ``_issue_pair`` revokes everything issued before: changing a
+        password because it may be known ends the sessions that may be using it, which is most of
+        the point.
+        """
+        if not verify_password(current_password, user.password_hash):
+            raise UnauthorizedException(
+                "The current password is incorrect.", code="INVALID_CREDENTIALS"
+            )
+
+        if verify_password(new_password, user.password_hash):
+            raise ConflictException(
+                "The new password must be different from the current one.",
+                code="PASSWORD_UNCHANGED",
+            )
+
+        user.password_hash = hash_password(new_password)
+        # Cleared here rather than anywhere else: this is the only path that sets a password the
+        # account holder chose, which is exactly what the flag was waiting for.
+        user.must_change_password = False
+        await self.session.flush()
+
+        return user, await self._issue_pair(user)
+
     async def login(self, email: str, password: str) -> tuple[User, TokenPair]:
         user = await self.accounts.find_by_email(email)
 

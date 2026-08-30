@@ -36,8 +36,15 @@ class TenantService:
         email: str,
         password_hash: str | None,
         full_name: str | None = None,
+        is_platform_admin: bool = False,
+        must_change_password: bool = False,
     ) -> tuple[Tenant, User]:
-        """Create a tenant and its owner together. A user cannot exist without a tenant."""
+        """Create a tenant and its owner together. A user cannot exist without a tenant.
+
+        The two flags default to off and are set by exactly one caller: the bootstrap that creates
+        the first platform administrator from a deployment's environment. Sign-up cannot reach them
+        — it does not pass them — which is what keeps "who is staff" out of the public surface.
+        """
         tenant = await self.tenants.add(Tenant(name=tenant_name))
         user = await self.users.add(
             User(
@@ -46,6 +53,8 @@ class TenantService:
                 full_name=full_name,
                 password_hash=password_hash,
                 role=UserRole.OWNER,
+                is_platform_admin=is_platform_admin,
+                must_change_password=must_change_password,
             )
         )
         return tenant, user
