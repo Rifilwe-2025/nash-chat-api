@@ -8,6 +8,10 @@ class ConfigError(RuntimeError): ...
 def load_config() -> dict[str, Any]: ...
 def reload() -> None: ...
 
+ADMIN_BOOTSTRAP_EMAIL: str
+ADMIN_BOOTSTRAP_NAME: str
+ADMIN_BOOTSTRAP_PASSWORD: str
+ADMIN_BOOTSTRAP_TENANT_NAME: str
 ANALYTICS_DEFAULT_WINDOW_DAYS: int
 ANALYTICS_MAX_WINDOW_DAYS: int
 APP_DEBUG: bool
