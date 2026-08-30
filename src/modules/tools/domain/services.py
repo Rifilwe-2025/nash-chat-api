@@ -288,9 +288,11 @@ class ToolService:
                 f"This agent already has a tool named {name!r}.", code="TOOL_NAME_TAKEN"
             )
 
-        # The first tool seeds the allowlist with its own host. A tenant who has just defined one
+        # The *first* tool seeds the allowlist with its own host: a tenant who has just defined one
         # endpoint plainly means to allow it, and making them add it twice would teach them the
-        # allowlist is bureaucracy rather than a control.
+        # allowlist is bureaucracy rather than a control. Every tool after that is created against
+        # the allowlist the tenant already has — if its host is not on the list the tool is refused
+        # at call time, and adding the host is a separate, deliberate act.
         await self._ensure_policy(agent.id, seed_host=host)
 
         return await self.tools.add(
@@ -406,10 +408,12 @@ class ToolService:
                 )
             )
 
-        if seed_host and not allowlist.is_allowed_host(seed_host, list(policy.allowed_hosts)):
-            return await self.policies.update(
-                policy, allowed_hosts=sorted({*policy.allowed_hosts, seed_host})
-            )
+        # Deliberately does *not* add the host to a policy that already exists. Seeding happens
+        # once, when the policy is created with the agent's first tool; after that the allowlist is
+        # a decision the tenant has made, and adding a tool must not quietly widen it. That is the
+        # whole reason the list lives on the agent rather than on each tool (see domain/models.py):
+        # "a policy that lived on each tool could be widened by adding another tool, which is
+        # precisely the thing an allowlist exists to prevent."
         return policy
 
     # -- internals ------------------------------------------------------------
