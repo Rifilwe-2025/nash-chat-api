@@ -1,0 +1,106 @@
+# Production shape (Phase 13). Differs from docker-compose.yml in the ways that matter once real
+# traffic arrives, and each difference is a decision rather than a default:
+#
+#   * **Nothing is published to the host but the API port**, and that only to the reverse proxy in
+#     front of it. Postgres and Redis are reachable on the internal network alone.
+#   * **Every secret comes from the environment**, with no fallback. A compose file that carries a
+#     working default password is a compose file that ships one.
+#   * **One role per container** through `scripts/entrypoint.sh`, and the api role is the only one
+#     that migrates — see the comments there.
+#   * **Exactly one beat**, ever. Two schedulers enqueue every due source twice.
+#   * Restart policies and healthchecks, because the failure this is designed for is a process
+#     dying at three in the morning.
+#
+# Run with:  docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+#
+# The runbook for what to do when one of these misbehaves is `.docs/RUNBOOK.md`.
+
+x-app: &app
+  build: .
+  restart: unless-stopped
+  env_file: [.env.production]
+  environment: &app_env
+    APP_ENV: production
+    QUEUE_MODE: redis
+    RATE_LIMIT_BACKEND: redis
+    DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    REDIS_URL: redis://redis:6379/0
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Persistence on: the queue holds a tenant's ingestion work and a customer's unanswered
+    # WhatsApp message. Losing that to a restart loses a reply somebody is waiting for.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    <<: *app
+    environment:
+      <<: *app_env
+      ROLE: api
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      # Name the proxy. Trusting every source would let a caller forge its own address and walk
+      # straight through the per-address throttle on the credential endpoints.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-127.0.0.1}
+    entrypoint: ["sh", "scripts/entrypoint.sh"]
+    ports:
+      # Bound to loopback: the reverse proxy terminating TLS is what faces the internet.
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/ready"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+
+  worker:
+    <<: *app
+    environment:
+      <<: *app_env
+      ROLE: worker
+      RUN_MIGRATIONS: "0"
+    entrypoint: ["sh", "scripts/entrypoint.sh"]
+    # Concurrency comes from replicas rather than from threads inside one process: extraction is
+    # I/O bound, and `--pool=solo` behaves identically on every platform.
+    deploy:
+      replicas: ${WORKER_REPLICAS:-2}
+
+  beat:
+    <<: *app
+    environment:
+      <<: *app_env
+      ROLE: beat
+      RUN_MIGRATIONS: "0"
+    entrypoint: ["sh", "scripts/entrypoint.sh"]
+
+volumes:
+  postgres_data:
+  redis_data:

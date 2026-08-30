@@ -76,6 +76,26 @@ Every endpoint returns the `ApiResponse` envelope, with camelCase JSON:
 { "success": true, "value": { }, "message": null }
 ```
 
+## Deployment and operations
+
+```bash
+cp .env.example .env.production   # DATABASE_URL, REDIS_URL, JWT_SECRET_KEY,
+                                  # SECURITY_ENCRYPTION_KEY, provider keys, CORS origins
+docker compose -f docker-compose.prod.yml --env-file .env.production up -d
+```
+
+`scripts/entrypoint.sh` runs `alembic upgrade head` before the API serves its first request, so a
+deploy migrates itself; the worker and scheduler roles do not migrate. Set
+`SECURITY_ENCRYPTION_KEY` **before the first tenant credential is stored** — rows written under a
+key cannot be read without it, and with no key set the API warns at startup and stores them in
+clear.
+
+- `.docs/RUNBOOK.md` — provider outage, queue backlog, webhook storm, and the rest.
+- `.docs/V1_ACCEPTANCE.md` — every §10 success criterion with the test or check that proves it.
+- `GET /analytics/operations` — request and provider counters for this process, opened by
+  `OBSERVABILITY_OPERATOR_TOKEN`. Closed when no token is configured.
+- `python scripts/smoke_load.py --url … --key …` — a load smoke test on the chat path.
+
 ## Development
 
 ```bash
@@ -83,7 +103,12 @@ ruff check .
 ruff format --check .
 mypy
 pytest
+pip-audit -r requirements.txt     # dependency audit; CI runs it on every PR
 ```
+
+`tests/architecture/test_layering.py` enforces the layering rules mechanically — repositories that
+commit, queries outside repositories, cross-module `internal/` imports and endpoints that skip the
+response envelope all fail there rather than in review.
 
 The suite runs against a real Postgres: it creates and migrates its own database
 (`DATABASE_TEST_URL`) and rolls each test back in a transaction.
