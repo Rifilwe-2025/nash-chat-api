@@ -7,10 +7,11 @@ is never taken from the request body — that is what stops a caller naming some
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.modules.tenants.domain.models import Tenant, User, UserRole
+from src.modules.tenants.domain.models import Tenant, TenantStatus, User, UserRole
 from src.modules.tenants.domain.repositories import TenantRepository, UserRepository
 from src.shared.exceptions import ConflictException, NotFoundException
 
@@ -54,11 +55,48 @@ class TenantService:
 
     async def find_by_email(self, email: str) -> User | None:
         """Returns ``None`` rather than raising: sign-in must not distinguish a missing account
-        from a wrong password, and an exception here would make that difference observable."""
-        return await self.users.get_by_email(email)
+        from a wrong password, and an exception here would make that difference observable.
+
+        The tenant comes back loaded, because the caller's very next question is whether the
+        account is enabled.
+        """
+        return await self.users.get_by_email_with_tenant(email)
 
     async def find_user(self, user_id: uuid.UUID) -> User | None:
-        return await self.users.get(user_id)
+        return await self.users.get_with_tenant(user_id)
+
+    # -- account status ------------------------------------------------------
+
+    async def set_status(
+        self, tenant_id: uuid.UUID, status: TenantStatus, note: str | None = None
+    ) -> Tenant:
+        """Enable or disable an account.
+
+        Lives here rather than in the admin module because a tenant row is this module's to write —
+        admin decides *that* an account should be disabled and calls in, which keeps the one place
+        that knows what a tenant is the one place that changes one.
+
+        Nothing is deleted and no other row is touched. The effect is entirely in what the
+        authentication seams do next, which is what makes it reversible.
+        """
+        tenant = await self.get_tenant(tenant_id)
+        return await self.tenants.update(
+            tenant,
+            status=status,
+            status_note=(note or "").strip()[:500] or None,
+            status_changed_at=datetime.now(UTC),
+        )
+
+    async def delete_tenant(self, tenant_id: uuid.UUID) -> None:
+        """Remove an account and, by cascade, everything that hangs off it.
+
+        Irreversible, and the reason this module exposes it rather than letting a caller reach the
+        repository: every row in the system is reachable from a tenant, so this is the one delete
+        that has to be spelled out in the module that owns the row it starts from. Whether it should
+        be called at all is the caller's decision to justify — see the admin service, which makes
+        someone type the account's name first.
+        """
+        await self.tenants.delete(await self.get_tenant(tenant_id))
 
     # -- the signed-in account -----------------------------------------------
 
