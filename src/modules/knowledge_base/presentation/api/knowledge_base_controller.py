@@ -83,6 +83,7 @@ def _knowledge_base(
         name=knowledge_base.name,
         description=knowledge_base.description,
         retrieval_tier=knowledge_base.retrieval_tier,
+        redact_pii=knowledge_base.redact_pii,
         source_count=source_count,
         agent_count=agent_count,
         created_at=knowledge_base.created_at,
@@ -160,6 +161,7 @@ async def create_knowledge_base(
         name=payload.name,
         description=payload.description,
         retrieval_tier=payload.retrieval_tier,
+        redact_pii=payload.redact_pii,
     )
     return ApiResponse.ok(
         _knowledge_base(knowledge_base, source_count=0, agent_count=0),
@@ -352,6 +354,7 @@ async def update_knowledge_base(
             "name": payload.name,
             "description": payload.description,
             "retrieval_tier": payload.retrieval_tier,
+            "redact_pii": payload.redact_pii,
         },
     )
     return await _detail(service, knowledge_base)

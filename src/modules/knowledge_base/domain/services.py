@@ -43,7 +43,7 @@ from src.modules.knowledge_base.domain.repositories import (
     KbSourceRepository,
     KnowledgeBaseRepository,
 )
-from src.modules.knowledge_base.internal import limits, tasks
+from src.modules.knowledge_base.internal import limits, redaction, tasks
 from src.modules.knowledge_base.internal.extractors import (
     ExtractedContent,
     ExtractionError,
@@ -64,6 +64,12 @@ from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import ConflictException, NotFoundException, ValidationException
 
 logger = logging.getLogger("api.knowledge_base")
+
+# Re-exported so other modules can name what retrieval returns without importing this module's
+# `internal/`, which is private (the layering rule in CLAUDE.md). The conversation engine takes a
+# `RetrievalResult` from us and reads its passages and citations; the type is part of this module's
+# domain surface even though the machinery that builds it is not.
+__all__ = ["KnowledgeBaseService", "RetrievalResult"]
 
 MANUAL_MEDIA_TYPE = "text/markdown"
 
@@ -105,10 +111,16 @@ class KnowledgeBaseService:
         name: str,
         description: str = "",
         retrieval_tier: RetrievalTier = RetrievalTier.AUTO,
+        redact_pii: bool = False,
     ) -> KnowledgeBase:
         await self._require_unique_name(name)
         return await self.knowledge_bases.add(
-            KnowledgeBase(name=name, description=description, retrieval_tier=retrieval_tier)
+            KnowledgeBase(
+                name=name,
+                description=description,
+                retrieval_tier=retrieval_tier,
+                redact_pii=redact_pii,
+            )
         )
 
     async def update(self, kb_id: uuid.UUID, changes: dict[str, Any]) -> KnowledgeBase:
@@ -531,14 +543,33 @@ class KnowledgeBaseService:
         byte_size: int,
         config: dict[str, Any] | None = None,
     ) -> KbSource:
+        """Store the extracted text, redacted first if the knowledge base asks for it (§5.7).
+
+        The redaction happens here rather than in the extractor because it is a property of *where
+        the text is going*, not of the file it came from: the same PDF may be public in one
+        knowledge base and full of customer details in another.
+
+        What was removed is recorded in ``config_json`` so the tenant can see it on the source. A
+        count of forty-one redacted phone numbers is how someone finds out they enabled this on a
+        knowledge base that needed them.
+        """
+        knowledge_base = await self.knowledge_bases.get(source.kb_id)
+        text, removed = redaction.apply(
+            result.text, bool(knowledge_base and knowledge_base.redact_pii)
+        )
+
         now = datetime.now(UTC)
+        metadata: dict[str, Any] = {**result.metadata}
+        if removed:
+            metadata["redacted"] = removed
+
         return await self.sources.update(
             source,
             status=SourceStatus.READY,
-            extracted_text=result.text,
+            extracted_text=text,
             error_detail=None,
             byte_size=byte_size,
-            config_json={**(config or source.config_json), **result.metadata},
+            config_json={**(config or source.config_json), **metadata},
             last_synced_at=now,
             source_updated_at=now,
         )

@@ -28,8 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import configs
 from src.core.queue import celery_app, enqueue, run_async
-from src.modules.knowledge_base.domain.models import KbSource, SourceStatus, SourceType
-from src.modules.knowledge_base.internal import limits
+from src.modules.knowledge_base.domain.models import (
+    KbSource,
+    KnowledgeBase,
+    SourceStatus,
+    SourceType,
+)
+from src.modules.knowledge_base.internal import limits, redaction
 from src.modules.knowledge_base.internal.connectors import ConnectorError, RestConnector
 from src.modules.knowledge_base.internal.connectors.base import ConnectorRecord
 from src.modules.knowledge_base.internal.extractors import (
@@ -102,16 +107,36 @@ async def extract_source(
         return await _fail(session, source, "Extraction took too long and was stopped.")
 
     now = datetime.now(UTC)
+    text, removed = await _redacted(session, source, result.text)
+
     source.status = SourceStatus.READY
-    source.extracted_text = result.text
+    source.extracted_text = text
     source.error_detail = None
-    source.config_json = {**source.config_json, **result.metadata}
+    source.config_json = {
+        **source.config_json,
+        **result.metadata,
+        **({"redacted": removed} if removed else {}),
+    }
     source.last_synced_at = now
     source.source_updated_at = now
     source.consecutive_failures = 0
     _schedule_next(source)
     await session.flush()
     return source
+
+
+async def _redacted(
+    session: AsyncSession, source: KbSource, text: str | None
+) -> tuple[str | None, dict[str, int]]:
+    """Apply the knowledge base's redaction policy before the text is stored (spec §5.7).
+
+    The flag lives on the knowledge base rather than the source, so the worker has to load it. One
+    extra read per extraction, on a path that has just paid for a model call or an HTTP fetch —
+    which is the cheapest possible place to put it, and far cheaper than a policy that could be
+    forgotten on one of the three code paths that store extracted text.
+    """
+    knowledge_base = await session.get(KnowledgeBase, source.kb_id)
+    return redaction.apply(text, bool(knowledge_base and knowledge_base.redact_pii))
 
 
 async def _content_for(source: KbSource) -> ExtractedContent:
@@ -187,11 +212,16 @@ async def sync_source(session: AsyncSession, source_id: uuid.UUID) -> KbSource |
         logger.info("source %s unchanged since last sync; skipped", source_id)
         return source
 
-    text = "\n".join(record.text for record in result.records)
+    joined = "\n".join(record.text for record in result.records)
+    redacted, removed = await _redacted(session, source, joined)
+    text = redacted or ""
+
     source.status = SourceStatus.READY
     source.extracted_text = text
     source.error_detail = None
     source.sync_cursor = fingerprint
+    # Measured on the stored text, not on what the endpoint returned: the storage quota is about
+    # what the platform is keeping, and redaction changes that.
     source.byte_size = len(text.encode("utf-8"))
     source.consecutive_failures = 0
     source.last_synced_at = now
@@ -203,6 +233,7 @@ async def sync_source(session: AsyncSession, source_id: uuid.UUID) -> KbSource |
         "pagesFetched": result.pages_fetched,
         "truncated": result.truncated,
         "characters": len(text),
+        **({"redacted": removed} if removed else {}),
     }
     _schedule_next(source)
     await session.flush()
