@@ -11,14 +11,32 @@ class UserResponse(CamelModel):
     id: uuid.UUID
     email: str
     full_name: str | None
-    role: str
+    role: str = Field(description="Your role inside your own organisation.")
     tenant_id: uuid.UUID
+    is_platform_admin: bool = Field(
+        default=False,
+        description=(
+            "Platform staff. Grants the `/admin` routes and the ability to act on any account. "
+            "Granted out of band by whoever runs the deployment, never through this API."
+        ),
+    )
 
 
 class TenantResponse(CamelModel):
     id: uuid.UUID
     name: str
-    plan: str = Field(description="Subscription tier.", examples=["free", "starter", "pro"])
+    plan: str = Field(
+        description="A label on the account. No plan limits are enforced.",
+        examples=["free", "starter", "pro"],
+    )
+    status: str = Field(
+        description=(
+            "`active` or `disabled`. A disabled account cannot sign in and its agents serve no "
+            "traffic, so you will not normally see this value — the request that would "
+            "return it is refused first."
+        ),
+        examples=["active"],
+    )
 
 
 class MeResponse(CamelModel):

@@ -38,11 +38,14 @@ def _user(user: User) -> UserResponse:
         full_name=user.full_name,
         role=user.role.value,
         tenant_id=user.tenant_id,
+        is_platform_admin=user.is_platform_admin,
     )
 
 
 def _tenant(tenant: Tenant) -> TenantResponse:
-    return TenantResponse(id=tenant.id, name=tenant.name, plan=tenant.plan.value)
+    return TenantResponse(
+        id=tenant.id, name=tenant.name, plan=tenant.plan.value, status=tenant.status.value
+    )
 
 
 @router.get(

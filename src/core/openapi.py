@@ -135,6 +135,20 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "admin",
+        "description": (
+            "**Platform staff only.** Accounts across the whole deployment: the list, one "
+            "account's size and people, the totals, and the lever that enables or disables an "
+            "account. Disabling is immediate and reversible — nobody can sign in, the "
+            "account's API keys are refused, and its agents answer on no channel — while "
+            "nothing is deleted. "
+            "These routes hold no tenant content by design. To read or change what is *inside* an "
+            "account, an administrator sends `X-Tenant-Id` on the ordinary endpoints and they "
+            "answer as though signed in to that account, with every query still tenant-scoped. "
+            "Platform admin is granted out of band by a script, never through this API."
+        ),
+    },
+    {
         "name": "account",
         "description": (
             "The signed-in user and the tenant they belong to. The tenant is always resolved from "
