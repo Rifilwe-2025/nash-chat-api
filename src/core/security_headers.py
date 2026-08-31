@@ -40,12 +40,21 @@ BASE_HEADERS: dict[str, str] = {
 }
 
 # Swagger UI and ReDoc are served from jsDelivr by FastAPI's defaults, and both need their own
-# inline styles. Narrow to the origins actually used rather than reaching for 'unsafe-inline'
+# inline styles. Swagger UI additionally *bootstraps itself from an inline script*: FastAPI's
+# template calls `SwaggerUIBundle({...})` in a `<script>` block with no src, so `script-src` has to
+# allow inline here or `/docs` renders blank — the bundle loads from the CDN, nothing ever calls
+# it, and the mount point stays empty. ReDoc is unaffected; it boots from a `<redoc>` element.
+#
+# 'unsafe-inline' is confined to this policy, and this policy is only ever sent on the
+# documentation paths. Those pages are static FastAPI-generated HTML carrying no tenant content,
+# so there is no injection sink on them; an API response still gets no CSP at all.
+#
+# Otherwise narrow to the origins actually used rather than reaching for 'unsafe-inline'
 # everywhere — a policy that allows everything is a policy that documents nothing.
 DOCS_CSP = (
     "default-src 'self'; "
     "img-src 'self' data: https://fastapi.tiangolo.com; "
-    "script-src 'self' https://cdn.jsdelivr.net; "
+    "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
     "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://fonts.googleapis.com; "
     "font-src 'self' https://cdn.jsdelivr.net https://fonts.gstatic.com; "
     "connect-src 'self'; "

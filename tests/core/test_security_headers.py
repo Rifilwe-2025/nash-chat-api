@@ -48,7 +48,25 @@ async def test_the_docs_carry_a_content_security_policy(client: AsyncClient) -> 
 
     policy = response.headers["content-security-policy"]
     assert "frame-ancestors 'none'" in policy
-    assert "script-src 'self' https://cdn.jsdelivr.net" in policy
+    assert "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net" in policy
+
+
+async def test_the_docs_policy_allows_swagger_uis_inline_bootstrap(client: AsyncClient) -> None:
+    """Swagger UI calls `SwaggerUIBundle({...})` from an inline script with no src.
+
+    Without 'unsafe-inline' on `script-src` the browser loads the bundle from the CDN, blocks the
+    call that would use it, and `/docs` renders as a blank page with an empty mount point — a
+    failure with no server-side symptom at all, which is why it is pinned here.
+    """
+    response = await client.get("/docs")
+
+    policy = response.headers["content-security-policy"]
+    script_src = next(d for d in policy.split("; ") if d.startswith("script-src "))
+    assert "'unsafe-inline'" in script_src
+
+    # The concession is scoped: it must not have leaked into the default.
+    default_src = next(d for d in policy.split("; ") if d.startswith("default-src "))
+    assert "'unsafe-inline'" not in default_src
 
 
 async def test_a_json_route_has_no_content_security_policy(client: AsyncClient) -> None:
