@@ -152,6 +152,16 @@ class PlatformUserRepository(BaseRepository[User]):
         query = select(User).where(func.lower(User.email) == email.strip().lower())
         return (await self.session.execute(query)).scalar_one_or_none()
 
+    async def platform_admin_exists(self) -> bool:
+        """Is there *any* platform administrator, in any tenant?
+
+        The question the startup bootstrap asks before it considers creating one. ``EXISTS`` rather
+        than a count: the answer is a yes or no, and on a deployment with several admins counting
+        them all to discover that the number is not zero is work for nothing.
+        """
+        query = select(User.id).where(User.is_platform_admin.is_(True)).limit(1)
+        return (await self.session.execute(select(query.exists()))).scalar_one()
+
     async def list_for_tenant(self, tenant_id: uuid.UUID) -> list[User]:
         query = select(User).where(User.tenant_id == tenant_id).order_by(User.created_at)
         return list((await self.session.execute(query)).scalars().all())
