@@ -46,12 +46,15 @@ class RecordingLLM:
 
     def __init__(self, reply: str = "Tinted paint is final sale, I'm afraid.") -> None:
         self.requests: list[tuple[str, CompletionRequest]] = []
+        #: The credential each call was made with, so a test can prove whose key paid for it.
+        self.keys: list[str | None] = []
         self.reply = reply
 
     async def complete(
         self, provider: str, request: CompletionRequest, api_key: str | None = None
     ) -> CompletionResult:
         self.requests.append((provider, request))
+        self.keys.append(api_key)
         return CompletionResult(
             content=self.reply,
             usage=TokenUsage(prompt_tokens=420, completion_tokens=35),
@@ -62,6 +65,7 @@ class RecordingLLM:
     def stream(self, provider: str, request: CompletionRequest, api_key: str | None = None):  # type: ignore[no-untyped-def]
         """Streamed deltas, split so a test sees more than one frame."""
         self.requests.append((provider, request))
+        self.keys.append(api_key)
         words = self.reply.split(" ")
 
         async def iterator() -> AsyncIterator[str]:
@@ -163,6 +167,44 @@ async def test_the_agents_configured_model_and_sampling_are_used(
     assert request.model == "gemini-2.0-flash"
     assert request.temperature == 0.4
     assert request.max_tokens == 512
+
+
+async def test_the_agents_own_provider_key_pays_for_the_turn(
+    session: AsyncSession, tenant: Tenant
+) -> None:
+    """The whole point of storing a key per agent: it is the one the provider call is made with."""
+    agent = await build_agent(session, tenant, model_api_key="tenant-gemini-key")
+    llm = RecordingLLM()
+
+    await service(session, tenant, llm).send_message(agent.id, "Hello")
+
+    assert llm.keys == ["tenant-gemini-key"]
+
+
+async def test_an_agent_without_a_key_falls_back_to_the_platforms(
+    session: AsyncSession, tenant: Tenant
+) -> None:
+    """``None`` is not an error — it means "use whatever the deployment configured", if anything."""
+    agent = await build_agent(session, tenant)
+    llm = RecordingLLM()
+
+    await service(session, tenant, llm).send_message(agent.id, "Hello")
+
+    assert llm.keys == [None]
+
+
+async def test_a_streamed_turn_uses_the_agents_key_too(
+    session: AsyncSession, tenant: Tenant
+) -> None:
+    """Streaming is a second code path to the provider, and it forgets things separately."""
+    agent = await build_agent(session, tenant, model_api_key="tenant-gemini-key")
+    llm = RecordingLLM()
+
+    _, stream = await service(session, tenant, llm).stream_message(agent.id, "Hello")
+    async for _ in stream:
+        pass
+
+    assert llm.keys == ["tenant-gemini-key"]
 
 
 async def test_token_usage_is_recorded_on_the_reply(session: AsyncSession, tenant: Tenant) -> None:
