@@ -21,6 +21,7 @@ from src.shared.llm.errors import (
     LLMUnavailableError,
 )
 from src.shared.llm.registry import PROVIDERS, LLMClient, get_provider
+from src.shared.llm.verification import KeyCheck, KeyCheckStatus, verify_key
 
 __all__ = [
     "PROVIDERS",
@@ -28,6 +29,8 @@ __all__ = [
     "ChatMessage",
     "CompletionRequest",
     "CompletionResult",
+    "KeyCheck",
+    "KeyCheckStatus",
     "LLMAuthenticationError",
     "LLMBadRequestError",
     "LLMClient",
@@ -45,4 +48,5 @@ __all__ = [
     "context_characters",
     "context_tokens",
     "get_provider",
+    "verify_key",
 ]
