@@ -258,7 +258,7 @@ class ConversationService:
                 await self._escalate(conversation, decision.reason or "Escalation trigger matched.")
             return conversation, _single_chunk(text)
 
-        request, provider, retrieval, history_turns = await self._prepare(
+        request, provider, api_key, retrieval, history_turns = await self._prepare(
             agent, conversation, message
         )
 
@@ -273,13 +273,14 @@ class ConversationService:
             return conversation, _single_chunk(result.reply.content)
 
         return conversation, self._stream_and_store(
-            conversation, provider, request, retrieval, history_turns
+            conversation, provider, api_key, request, retrieval, history_turns
         )
 
     async def _stream_and_store(
         self,
         conversation: Conversation,
         provider: str,
+        api_key: str | None,
         request: CompletionRequest,
         retrieval: RetrievalResult,
         history_turns: int,
@@ -287,7 +288,7 @@ class ConversationService:
         """Yield deltas, then store the assembled reply once the stream ends."""
         pieces: list[str] = []
         try:
-            async for delta in self._llm.stream(provider, request):
+            async for delta in self._llm.stream(provider, request, api_key=api_key):
                 pieces.append(delta)
                 yield delta
         except LLMError as exc:
@@ -329,11 +330,16 @@ class ConversationService:
 
     async def _prepare(
         self, agent: Agent, conversation: Conversation, message: str
-    ) -> tuple[CompletionRequest, str, RetrievalResult, int]:
+    ) -> tuple[CompletionRequest, str, str | None, RetrievalResult, int]:
         """Everything a turn needs before the provider is called.
 
         Shared by the buffered and streamed paths so the two cannot drift: a streamed reply must be
         produced from exactly the same prompt, knowledge and history as a buffered one.
+
+        The agent's own provider key comes back beside the provider name and is threaded through
+        every call this turn makes — the first completion, each round of the tool loop, and the
+        summariser. Carrying it here rather than resolving it per call site is what keeps a turn
+        from silently billing half of itself to the platform's key.
         """
         model = str(agent.model_config_json.get("model") or "")
         provider = agent.model_provider.value if agent.model_provider else ""
@@ -367,7 +373,7 @@ class ConversationService:
             temperature=float(agent.model_config_json.get("temperature", DEFAULT_TEMPERATURE)),
             tools=tools,
         )
-        return request, provider, retrieval, len(turns)
+        return request, provider, agent.model_api_key, retrieval, len(turns)
 
     def _citations(self, retrieval: RetrievalResult) -> list[Any]:
         return [
@@ -386,13 +392,15 @@ class ConversationService:
         user_message: Message,
         message: str,
     ) -> TurnResult:
-        request, provider, retrieval, history_turns = await self._prepare(
+        request, provider, api_key, retrieval, history_turns = await self._prepare(
             agent, conversation, message
         )
 
         try:
-            result = await self._llm.complete(provider, request)
-            outcome = await self._resolve_tools(agent, conversation, provider, request, result)
+            result = await self._llm.complete(provider, request, api_key=api_key)
+            outcome = await self._resolve_tools(
+                agent, conversation, provider, api_key, request, result
+            )
         except LLMError as exc:
             logger.warning("provider call failed for agent %s: %s", agent.id, exc)
             raise ConflictException(
@@ -434,6 +442,7 @@ class ConversationService:
         agent: Agent,
         conversation: Conversation,
         provider: str,
+        api_key: str | None,
         request: CompletionRequest,
         first: CompletionResult,
     ) -> tool_loop.ToolLoopOutcome:
@@ -454,6 +463,7 @@ class ConversationService:
             provider,
             request,
             first,
+            api_key=api_key,
             tools=self.tools,
             agent_id=agent.id,
             conversation_id=conversation.id,
@@ -504,6 +514,7 @@ class ConversationService:
             previous_summary=conversation.summary,
             transcript=[(turn.role, turn.content) for turn in fresh],
             max_tokens=configs.CONVERSATIONS_SUMMARY_MAX_TOKENS,
+            api_key=agent.model_api_key,
         )
         if summary is None:
             return  # provider blip: keep the summary we had rather than erasing it

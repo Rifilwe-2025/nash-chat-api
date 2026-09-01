@@ -93,12 +93,17 @@ async def run(
     agent_id: uuid.UUID,
     conversation_id: uuid.UUID,
     max_calls: int,
+    api_key: str | None = None,
 ) -> ToolLoopOutcome:
     """Resolve any tool calls in ``first`` and return the model's final answer.
 
     Takes the first completion rather than making it, so the caller keeps ownership of how the
     initial request is built and of translating a provider failure — and so an agent whose model
     asked for nothing pays no extra cost at all: the loop returns immediately.
+
+    ``api_key`` is the agent's own provider credential, and has to be passed on: the follow-up
+    calls below are the same turn as the first one, and a loop that fell back to the platform's key
+    halfway through would bill the wrong account for the half the tenant cannot see.
     """
     outcome = ToolLoopOutcome(result=first, usage=first.usage)
     if not first.tool_calls:
@@ -155,7 +160,9 @@ async def run(
         # each request, and a partial set is a 400.
         follow_up = _with_messages(request, messages)
         try:
-            current = await llm.complete(provider, follow_up)  # type: ignore[attr-defined]
+            current = await llm.complete(  # type: ignore[attr-defined]
+                provider, follow_up, api_key=api_key
+            )
         except LLMError:
             # The lookups themselves succeeded; only the summarising call failed. Returning what we
             # have lets the caller raise its own PROVIDER_UNAVAILABLE, and the tool calls are still
