@@ -8,6 +8,15 @@ field a column would mean a migration per product tweak with no payoff.
 ``agent_version`` keeps a snapshot of the configuration before each change, which is what makes
 rollback possible. Snapshots are immutable — rolling back writes a *new* version rather than
 deleting history.
+
+``model_api_key`` is the one part of the configuration that is **neither JSON nor versioned**,
+and both exceptions are deliberate. It is a column of its own because it is encrypted at rest
+(spec §5.7) and ``model_config_json`` is not — a secret inside a plain JSONB blob is a secret in
+a database dump. It is left out of every snapshot for the same reason: ``agent_version.snapshot``
+is readable JSONB that history never deletes, so putting a credential in it would keep every key
+the tenant has ever pasted, in clear, forever. The practical consequence is that a rollback
+restores an agent's behaviour and leaves its credential alone, which is also the behaviour
+somebody rolling back a persona would expect.
 """
 
 from __future__ import annotations
@@ -20,6 +29,7 @@ from sqlalchemy import ForeignKey, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from src.shared.crypto import EncryptedString
 from src.shared.database.base_model import BaseModel, TenantScopedModel, enum_column
 
 
@@ -55,6 +65,9 @@ class Agent(TenantScopedModel):
     model_config_json: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
+    #: The tenant's own key for ``model_provider``, encrypted at rest. ``None`` means the agent has
+    #: none of its own and falls back to whatever key the deployment configured for that provider.
+    model_api_key: Mapped[str | None] = mapped_column(EncryptedString(1024), nullable=True)
     status: Mapped[AgentStatus] = mapped_column(
         enum_column(AgentStatus, "agent_status"),
         nullable=False,

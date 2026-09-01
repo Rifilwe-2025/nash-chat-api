@@ -1,7 +1,12 @@
-"""Agent business logic: configuration, lifecycle, and version history.
+"""Agent business logic: configuration, lifecycle, version history, and provider credentials.
 
 Every method takes the tenant id from the caller's token — the repository is constructed with it, so
 no query in this module can reach another tenant's agents.
+
+The provider key gets its own methods rather than riding in ``update``'s change dictionary. Writing
+one is not a configuration edit: it must not bump the version, must not snapshot (the snapshot is
+plaintext JSONB — see the model), and "leave it alone" and "clear it" have to be distinguishable,
+which a dictionary that drops ``None`` cannot express.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ from src.modules.agents.domain.repositories import AgentRepository, AgentVersion
 from src.modules.agents.internal.transitions import can_transition, publish_blockers
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import ConflictException, NotFoundException, ValidationException
+from src.shared.llm.verification import KeyCheck, verify_key
 
 
 class AgentService:
@@ -46,6 +52,7 @@ class AgentService:
         guardrails: dict[str, Any] | None = None,
         model_provider: ModelProvider | None = None,
         model_settings: dict[str, Any] | None = None,
+        model_api_key: str | None = None,
     ) -> Agent:
         await self._require_unique_name(name)
 
@@ -59,6 +66,7 @@ class AgentService:
                 guardrails=guardrails or {},
                 model_provider=model_provider,
                 model_config_json=model_settings or {},
+                model_api_key=_clean_key(model_api_key),
                 status=AgentStatus.DRAFT,
                 version=1,
             )
@@ -142,6 +150,60 @@ class AgentService:
             version=agent.version + 1,
         )
 
+    # -- provider credentials ------------------------------------------------
+
+    async def set_model_api_key(self, agent_id: uuid.UUID, api_key: str) -> Agent:
+        """Store the tenant's own key for this agent's provider.
+
+        No snapshot and no version bump. A version exists so a configuration change can be undone,
+        and there is nothing to undo here: the previous key is not recoverable from history by
+        design, and a rotated credential is not a behaviour change anybody wants to roll back into.
+        """
+        cleaned = _clean_key(api_key)
+        if cleaned is None:
+            raise ValidationException(
+                "An API key cannot be blank. Use DELETE to remove the one that is stored.",
+                code="MODEL_API_KEY_EMPTY",
+            )
+        return await self.agents.update(await self.get(agent_id), model_api_key=cleaned)
+
+    async def clear_model_api_key(self, agent_id: uuid.UUID) -> Agent:
+        """Forget the stored key. The agent falls back to the deployment's key, if it has one."""
+        return await self.agents.update(await self.get(agent_id), model_api_key=None)
+
+    async def verify_model_key(
+        self,
+        agent_id: uuid.UUID,
+        api_key: str | None = None,
+        model: str | None = None,
+    ) -> KeyCheck:
+        """Ask the provider whether this agent's credential actually works.
+
+        ``api_key`` and ``model`` override what is stored, which is what lets the builder test a key
+        the user has typed but not yet saved — the alternative being to save an unverified
+        credential in order to find out that it is wrong.
+
+        Nothing is written. A check is a read of the outside world, and a passing check is not a
+        reason to store the key that produced it: the caller decides that.
+        """
+        agent = await self.get(agent_id)
+        if agent.model_provider is None:
+            raise ValidationException(
+                "This agent has no model provider selected.", code="AGENT_NOT_CONFIGURED"
+            )
+
+        chosen_model = (model or agent.model_config_json.get("model") or "").strip()
+        if not chosen_model:
+            raise ValidationException(
+                "This agent has no model selected.", code="AGENT_NOT_CONFIGURED"
+            )
+
+        return await verify_key(
+            agent.model_provider.value,
+            chosen_model,
+            _clean_key(api_key) or agent.model_api_key,
+        )
+
     # -- internals -----------------------------------------------------------
 
     async def _transition(self, agent: Agent, target: AgentStatus) -> Agent:
@@ -176,3 +238,14 @@ class AgentService:
                 },
             )
         )
+
+
+def _clean_key(api_key: str | None) -> str | None:
+    """Trim, and treat an all-whitespace key as no key at all.
+
+    Pasting a credential picks up a trailing newline more often than not, and every provider rejects
+    the key with it attached — a failure that looks exactly like a wrong key to whoever pasted it.
+    """
+    if api_key is None:
+        return None
+    return api_key.strip() or None

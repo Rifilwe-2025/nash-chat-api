@@ -67,6 +67,7 @@ async def summarise(
     previous_summary: str | None,
     transcript: list[tuple[str, str]],
     max_tokens: int,
+    api_key: str | None = None,
 ) -> str | None:
     """Fold ``transcript`` into the summary, or return ``None`` if it could not be done.
 
@@ -80,6 +81,9 @@ async def summarise(
         result = await client.complete(
             provider,
             build_summary_request(previous_summary, transcript, model, max_tokens),
+            # The agent's own key. Summarising is part of serving the conversation, not a platform
+            # chore, so it is billed to whoever the rest of the turn is billed to.
+            api_key=api_key,
         )
     except LLMError:
         logger.warning("summarisation failed; keeping the previous summary", exc_info=True)

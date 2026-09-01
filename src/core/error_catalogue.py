@@ -66,6 +66,9 @@ REQUEST = {
     "EMPTY_MESSAGE": "A chat message cannot be blank.",
     "MESSAGE_TOO_LONG": "The message is longer than the configured maximum.",
     "AGENT_NAME_TAKEN": "Another agent in your tenant already has that name.",
+    "MODEL_API_KEY_EMPTY": (
+        "A provider key cannot be blank. Send `DELETE /agents/{id}/model-key` to remove one."
+    ),
     "PASSWORD_UNCHANGED": "The new password is the same as the current one.",
     "KB_NAME_TAKEN": "Another knowledge base in your tenant already has that name.",
     "TOOL_NAME_TAKEN": "That agent already has a tool with that name.",
