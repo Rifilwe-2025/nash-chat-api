@@ -14,9 +14,22 @@ from typing import Any
 from pydantic import Field
 
 from src.modules.agents.domain.models import AgentStatus, ModelProvider
+from src.shared.llm.verification import KeyCheckStatus
 from src.shared.responses import CamelModel
 
 MAX_RULES = 50
+MAX_API_KEY = 1024
+
+#: How much of a stored key is echoed back so a person can recognise which one it is. Four
+#: characters identifies a key to whoever pasted it and is useless to anybody else.
+HINT_CHARACTERS = 4
+
+
+def key_hint(api_key: str | None) -> str | None:
+    """The tail of a stored key, as ``…abcd``. ``None`` when nothing is stored."""
+    if not api_key:
+        return None
+    return f"…{api_key[-HINT_CHARACTERS:]}" if len(api_key) > HINT_CHARACTERS else "…"
 
 
 class EngagementRules(CamelModel):
@@ -113,6 +126,13 @@ class AgentConfig(CamelModel):
     )
 
 
+API_KEY_FIELD_DESCRIPTION = (
+    "Your own API key for the selected provider, stored encrypted and used for this agent's "
+    "requests. Never returned; the response reports whether one is set and shows its last four "
+    "characters. Omit it to leave the stored key alone."
+)
+
+
 class CreateAgentRequest(CamelModel):
     name: str = Field(
         min_length=1,
@@ -125,6 +145,12 @@ class CreateAgentRequest(CamelModel):
     guardrails: Guardrails = Field(default_factory=Guardrails)
     model_provider: ModelProvider | None = None
     model_settings: ModelSettings | None = None
+    model_api_key: str | None = Field(
+        default=None,
+        max_length=MAX_API_KEY,
+        description=API_KEY_FIELD_DESCRIPTION,
+        examples=["AIzaSy..."],
+    )
 
 
 class UpdateAgentRequest(CamelModel):
@@ -136,6 +162,80 @@ class UpdateAgentRequest(CamelModel):
     guardrails: Guardrails | None = None
     model_provider: ModelProvider | None = None
     model_settings: ModelSettings | None = None
+    model_api_key: str | None = Field(
+        default=None,
+        max_length=MAX_API_KEY,
+        description=(
+            API_KEY_FIELD_DESCRIPTION
+            + " Replacing it does not create a version — credentials are not part of the "
+            "configuration history. Send `DELETE /agents/{id}/model-key` to remove one."
+        ),
+    )
+
+
+class ModelKeyTestRequest(CamelModel):
+    """A key to try, and what to try it against.
+
+    Every field is optional so one endpoint serves both moments it is needed: testing a key that is
+    already stored (send nothing), and testing one that has been typed into the builder but not
+    saved yet (send the key). Testing before saving is the point — otherwise the only way to find
+    out a credential is wrong is to store it and wait for a customer to hit the error.
+    """
+
+    model_api_key: str | None = Field(
+        default=None,
+        max_length=MAX_API_KEY,
+        description="Key to test. Omit to test the one already stored on the agent.",
+    )
+    model: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        description="Model to test against. Omit to use the agent's configured model.",
+        examples=["gemini-2.0-flash"],
+    )
+
+
+class ProviderKeyTestRequest(CamelModel):
+    """A standalone check, for an agent that does not exist yet."""
+
+    model_provider: ModelProvider = Field(description="Provider the key belongs to.")
+    model: str = Field(
+        min_length=1,
+        max_length=128,
+        description="Model the key should be able to reach.",
+        examples=["gemini-2.0-flash"],
+    )
+    model_api_key: str = Field(
+        min_length=1, max_length=MAX_API_KEY, description="The key to test. Never stored."
+    )
+
+
+class ModelKeyTestResponse(CamelModel):
+    """What the provider said. A rejected key is a 200 with `ok: false`, not an error.
+
+    The request succeeded — the platform asked a question and got an answer. Reporting "your key is
+    wrong" as a 4xx would make it indistinguishable, to a client's error handling, from "your
+    request to test it was malformed".
+    """
+
+    ok: bool = Field(description="True only when the provider answered successfully.")
+    status: KeyCheckStatus = Field(
+        description=(
+            "Why it failed, in terms you can act on: `invalid_key` (the provider rejected the "
+            "credential), `model_rejected` (the key works, the model name or its access does "
+            "not), `rate_limited` (the key works and is throttled right now), `unavailable` (the "
+            "provider could not be reached — this says nothing about the key), `not_configured` "
+            "(no key was supplied and none is stored)."
+        ),
+        examples=["ok"],
+    )
+    provider: ModelProvider = Field(description="Provider that was contacted.")
+    model: str = Field(description="Model the probe ran against.")
+    latency_ms: int = Field(description="Round trip to the provider, in milliseconds.")
+    detail: str = Field(
+        description="The provider's own message, or guidance when it did not give one."
+    )
 
 
 class RollbackRequest(CamelModel):
@@ -155,6 +255,18 @@ class AgentResponse(CamelModel):
     guardrails: Guardrails
     model_provider: ModelProvider | None
     model_settings: ModelSettings | None
+    has_model_api_key: bool = Field(
+        description=(
+            "Whether this agent has its own provider key stored. False means it falls back to "
+            "whatever key the deployment is configured with, which may be none."
+        ),
+        examples=[True],
+    )
+    model_api_key_hint: str | None = Field(
+        default=None,
+        description="Last four characters of the stored key, so it can be told apart from another.",
+        examples=["…a91f"],
+    )
     created_at: datetime
     updated_at: datetime
 
@@ -167,6 +279,9 @@ class AgentSummaryResponse(CamelModel):
     status: AgentStatus
     version: int
     model_provider: ModelProvider | None
+    has_model_api_key: bool = Field(
+        description="Whether the agent carries its own provider key.", examples=[True]
+    )
     updated_at: datetime
 
 

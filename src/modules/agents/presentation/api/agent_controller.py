@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import Depends, Path
 
-from src.modules.agents.domain.models import Agent, AgentVersion
+from src.modules.agents.domain.models import Agent, AgentVersion, ModelProvider
 from src.modules.agents.domain.services import AgentService
 from src.modules.agents.presentation.dtos.agent import (
     AgentResponse,
@@ -14,13 +14,18 @@ from src.modules.agents.presentation.dtos.agent import (
     CreateAgentRequest,
     EngagementRules,
     Guardrails,
+    ModelKeyTestRequest,
+    ModelKeyTestResponse,
     ModelSettings,
+    ProviderKeyTestRequest,
     RollbackRequest,
     UpdateAgentRequest,
+    key_hint,
 )
 from src.modules.tenants.presentation.dependencies import CurrentTenantDep
 from src.shared.database.dependencies import SessionDep
 from src.shared.database.pagination import PageParamsDep
+from src.shared.llm.verification import KeyCheck, verify_key
 from src.shared.responses import ApiResponse, PaginatedResponse, create_router
 
 router = create_router(prefix="/agents", tags=["agents"])
@@ -62,6 +67,11 @@ def _agent(agent: Agent) -> AgentResponse:
             if agent.model_config_json.get("model")
             else None
         ),
+        # The key itself is never in a response, on any route. What a builder screen needs is
+        # whether one is there and which one it is, and the hint answers both without the value
+        # ever crossing the wire a second time.
+        has_model_api_key=bool(agent.model_api_key),
+        model_api_key_hint=key_hint(agent.model_api_key),
         created_at=agent.created_at,
         updated_at=agent.updated_at,
     )
@@ -74,7 +84,19 @@ def _summary(agent: Agent) -> AgentSummaryResponse:
         status=agent.status,
         version=agent.version,
         model_provider=agent.model_provider,
+        has_model_api_key=bool(agent.model_api_key),
         updated_at=agent.updated_at,
+    )
+
+
+def _key_check(check: KeyCheck) -> ModelKeyTestResponse:
+    return ModelKeyTestResponse(
+        ok=check.ok,
+        status=check.status,
+        provider=ModelProvider(check.provider),
+        model=check.model,
+        latency_ms=check.latency_ms,
+        detail=check.detail,
     )
 
 
@@ -114,8 +136,40 @@ async def create_agent(
         guardrails=payload.guardrails.model_dump(),
         model_provider=payload.model_provider,
         model_settings=payload.model_settings.model_dump() if payload.model_settings else None,
+        model_api_key=payload.model_api_key,
     )
     return ApiResponse.ok(_agent(agent), message="Agent created.")
+
+
+@router.post(
+    "/model-key/test",
+    response_model=ApiResponse[ModelKeyTestResponse],
+    summary="Test a provider API key",
+    description=(
+        "Checks a provider key **without storing it anywhere**, by making the smallest real call "
+        "the provider allows against the model you name. Use it before creating an agent, or "
+        "whenever a key has been typed but not saved.\n\n"
+        "A rejected key is a **200 with `ok: false`** — the request to test succeeded, and its "
+        "answer is that the credential does not work. Read `status` to know what to change: "
+        "`invalid_key` is the key, `model_rejected` is the model name or this account's access to "
+        "it, and `unavailable` is the provider being unreachable, which says nothing about "
+        "either.\n\n"
+        "The key is used for one request and discarded. It is not logged."
+    ),
+    responses={
+        200: {"description": "The provider was asked. `ok` says what it answered."},
+        401: UNAUTHORIZED,
+        422: {"description": "The payload failed validation (`VALIDATION_ERROR`)."},
+    },
+)
+async def test_provider_key(
+    payload: ProviderKeyTestRequest, _: CurrentTenantDep
+) -> ApiResponse[ModelKeyTestResponse]:
+    """Declared ahead of the `/{agent_id}` routes so `model-key` is read as a literal segment."""
+    check = await verify_key(
+        payload.model_provider.value, payload.model.strip(), payload.model_api_key.strip()
+    )
+    return ApiResponse.ok(_key_check(check))
 
 
 @router.get(
@@ -183,6 +237,11 @@ async def update_agent(
             payload.model_settings.model_dump() if payload.model_settings else None
         ),
     }
+    # Applied on its own, before the configuration edit, and deliberately not part of `changes`:
+    # a credential is not versioned, so it must not be what turns a no-op PATCH into a new version.
+    # Ordering matters only in that the agent returned below has to carry the new hint.
+    if payload.model_api_key is not None:
+        await service.set_model_api_key(agent_id, payload.model_api_key)
     return ApiResponse.ok(_agent(await service.update(agent_id, changes)))
 
 
@@ -322,3 +381,65 @@ async def rollback(
 ) -> ApiResponse[AgentResponse]:
     agent = await service.rollback(agent_id, version, note=payload.note)
     return ApiResponse.ok(_agent(agent), message=f"Rolled back to version {version}.")
+
+
+@router.post(
+    "/{agent_id}/model-key/test",
+    response_model=ApiResponse[ModelKeyTestResponse],
+    summary="Test this agent's provider key",
+    description=(
+        "Makes a real call to the agent's provider and reports whether it worked.\n\n"
+        "Send an empty body to test the key that is **stored** on the agent — the check to run "
+        "after a key is saved, or when a working agent suddenly stops answering. Send "
+        "`modelApiKey` to test one that has been typed into the builder but not saved yet, and "
+        "`model` to try a different model without changing the agent. Neither is written: a "
+        "passing test does not store the key that passed.\n\n"
+        "As with the standalone check, a credential that does not work is a **200 with "
+        "`ok: false`**, not an error."
+    ),
+    responses={
+        200: {"description": "The provider was asked. `ok` says what it answered."},
+        401: UNAUTHORIZED,
+        404: NOT_FOUND,
+        422: {
+            "description": (
+                "The agent has no provider or no model selected, so there is nothing to test "
+                "against (`AGENT_NOT_CONFIGURED`)."
+            )
+        },
+    },
+)
+async def test_agent_model_key(
+    agent_id: AgentIdPath,
+    payload: ModelKeyTestRequest,
+    service: AgentServiceDep,
+) -> ApiResponse[ModelKeyTestResponse]:
+    check = await service.verify_model_key(
+        agent_id, api_key=payload.model_api_key, model=payload.model
+    )
+    return ApiResponse.ok(_key_check(check))
+
+
+@router.delete(
+    "/{agent_id}/model-key",
+    response_model=ApiResponse[AgentResponse],
+    summary="Remove this agent's provider key",
+    description=(
+        "Forgets the stored credential. The agent falls back to whatever key the deployment is "
+        "configured with for that provider — which may be none, in which case the agent stops "
+        "answering until a key is set again.\n\n"
+        "Removing a key does not create a version: credentials are not part of the configuration "
+        "history, so this cannot be undone by rolling back. Deleting an agent with no key is a "
+        "no-op rather than a 404."
+    ),
+    responses={
+        200: {"description": "No key is stored on this agent any more."},
+        401: UNAUTHORIZED,
+        404: NOT_FOUND,
+    },
+)
+async def delete_agent_model_key(
+    agent_id: AgentIdPath, service: AgentServiceDep
+) -> ApiResponse[AgentResponse]:
+    agent = await service.clear_model_api_key(agent_id)
+    return ApiResponse.ok(_agent(agent), message="Provider key removed.")
