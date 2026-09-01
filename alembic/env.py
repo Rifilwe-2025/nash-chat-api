@@ -32,6 +32,7 @@ from src.modules.knowledge_base.domain import models as kb_models  # noqa: F401
 from src.modules.tenants.domain import models as tenant_models  # noqa: F401
 from src.modules.tools.domain import models as tool_models  # noqa: F401
 from src.shared.database.base_model import Base
+from src.shared.database.engine import normalise_async_url
 
 config = context.config
 
@@ -46,8 +47,11 @@ def get_url() -> str:
     application.yaml."""
     configured = config.get_main_option("sqlalchemy.url", None)
     if configured:
-        return configured
-    return os.environ.get("ALEMBIC_DATABASE_URL") or configs.DATABASE_URL  # noqa: TID251
+        return normalise_async_url(configured)
+    url = os.environ.get("ALEMBIC_DATABASE_URL") or configs.DATABASE_URL  # noqa: TID251
+    # Migrations run against the same managed-host URL the app gets, and
+    # async_engine_from_config needs the async driver named for the same reason.
+    return normalise_async_url(url)
 
 
 def run_migrations_offline() -> None:
