@@ -867,8 +867,12 @@ Sections: `app`, `server`, `database`, `redis`, `llm`, `conversations`, `knowled
 
 ### Prerequisites
 
-Python 3.12, PostgreSQL, and Redis. The pinned toolchain (Dockerfile, CI, mypy, ruff) all target
-3.12 — running a different interpreter locally is the usual source of "works on my machine".
+Python 3.12, PostgreSQL, and Redis. The pinned toolchain (`.python-version`, Dockerfile, CI, mypy,
+ruff) all targets 3.12 — running a different interpreter is the usual source of "works on my
+machine". `requirements.txt` is a full freeze of exact versions, so a different minor version will
+fail to install: several pins are wheel-only packages (`psycopg-binary`, `greenlet`, `lxml`) with no
+wheel built for another interpreter. `.python-version` is what pins the deploy host, which would
+otherwise use its provider's default.
 
 ### Local setup
 
