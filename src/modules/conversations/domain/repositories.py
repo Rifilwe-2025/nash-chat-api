@@ -51,12 +51,15 @@ class ConversationRepository(TenantScopedRepository[Conversation]):
         page: PageRequest,
         agent_id: uuid.UUID | None = None,
         status: ConversationStatus | None = None,
+        channel: Channel | None = None,
     ) -> Page[Conversation]:
         query = self._base_query()
         if agent_id is not None:
             query = query.where(Conversation.agent_id == agent_id)
         if status is not None:
             query = query.where(Conversation.status == status)
+        if channel is not None:
+            query = query.where(Conversation.channel == channel)
 
         total = (
             await self.session.execute(select(func.count()).select_from(query.subquery()))

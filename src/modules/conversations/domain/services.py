@@ -126,10 +126,19 @@ class ConversationService:
         page: PageRequest,
         agent_id: uuid.UUID | None = None,
         status: ConversationStatus | None = None,
+        channel: Channel | None = None,
     ) -> Page[Conversation]:
+        """``channel`` is what separates a builder's test thread from real customer traffic.
+
+        Without it, "the latest conversation for this agent" is whichever channel spoke most
+        recently — so a preview screen resuming the newest thread would happily reopen somebody's
+        live WhatsApp conversation and continue it in the builder.
+        """
         if agent_id is not None:
             await self.agents.get(agent_id)  # 404s a foreign agent before listing anything
-        return await self.conversations.list_conversations(page, agent_id=agent_id, status=status)
+        return await self.conversations.list_conversations(
+            page, agent_id=agent_id, status=status, channel=channel
+        )
 
     async def transcript(self, conversation_id: uuid.UUID, page: PageRequest) -> Page[Message]:
         await self.get(conversation_id)
