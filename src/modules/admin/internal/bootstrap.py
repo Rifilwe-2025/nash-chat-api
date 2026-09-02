@@ -13,10 +13,17 @@ API says so on every boot.
 
 Three rules keep this from becoming a way to lose an account:
 
+* **It only bootstraps an unadministered platform.** If *any* platform administrator already
+  exists — whatever their address — nothing is written. This is the outer guard, and it is about
+  the environment file changing rather than the database: pointing ``ADMIN_BOOTSTRAP_EMAIL`` at a
+  new address on a live deployment used to mint a second administrator silently, which is a way to
+  grow platform staff that nobody reviews. Adding an administrator is now something an existing
+  administrator does deliberately, not something a redeploy does on their behalf.
 * **It only ever creates.** If a user with that address exists, nothing is written — no password
   reset, no re-flagging. A deployment restarting must never hand a live account a password from an
   environment file, and an administrator who has changed theirs must not have it changed back at
-  three in the morning by a container restart.
+  three in the morning by a container restart. This still matters with the guard above, because the
+  address may belong to an ordinary tenant user on a platform that has no administrator at all.
 * **It needs both values.** Without an email *and* a password nothing happens at all. A half-set
   environment creates no account and no default password.
 * **It is quiet about the password and loud about everything else.** The address and the tenant are
@@ -41,6 +48,7 @@ from pydantic.networks import EmailStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import configs
+from src.modules.admin.domain.services import AdminService
 from src.modules.auth.domain.services import AuthService
 from src.modules.tenants.domain.models import User
 from src.modules.tenants.domain.services import TenantService
@@ -98,6 +106,12 @@ async def ensure_bootstrap_admin(session: AsyncSession) -> BootstrapResult:
         return BootstrapResult(created=False, reason="password too short", email=email)
 
     try:
+        if await AdminService(session).platform_admin_exists():
+            # The outer guard. Deliberately not "does *this* address exist": a deployment whose
+            # environment has been repointed at a new address still has an administrator, and
+            # creating a second one from a file nobody reviewed is not how staff should be added.
+            return BootstrapResult(created=False, reason="an administrator already exists")
+
         existing = await TenantService(session).find_by_email(email)
         if existing is not None:
             # Deliberately does nothing else. See the module docstring: a restart must not reset a

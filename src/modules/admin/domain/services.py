@@ -105,6 +105,16 @@ class AdminService:
     async def overview(self) -> PlatformTotals:
         return await self.directory.totals()
 
+    async def platform_admin_exists(self) -> bool:
+        """Whether the platform has an administrator at all.
+
+        Asked at startup, before the bootstrap considers creating one. Unlike everything else on
+        this service it is called by nobody who has been checked as staff — there is nobody to
+        check yet, which is the situation it exists to detect — so it deliberately returns a bare
+        boolean and discloses nothing about who the administrators are.
+        """
+        return await self.users.platform_admin_exists()
+
     # -- the lever -----------------------------------------------------------
 
     async def set_enabled(

@@ -6,6 +6,8 @@ what these tests pin down is not "an account gets created" but the three propert
 creating one safe:
 
 * it is created **once**, and a restart never resets a live account's password back to the file;
+* it is created only on a platform that has **no administrator at all**, so repointing the
+  environment at a new address cannot mint extra staff on a live deployment;
 * the account can do **nothing** until the password is changed, not merely be advised to change it;
 * changing it **ends the sessions** that were using the old one.
 """
@@ -47,6 +49,88 @@ async def sign_in(client: AsyncClient, password: str = HANDOVER) -> Any:
 
 def header(tokens: dict[str, Any]) -> dict[str, str]:
     return {"Authorization": f"Bearer {tokens['accessToken']}"}
+
+
+async def admin_count(session: AsyncSession) -> int:
+    """Platform staff, counted in SQL — the thing the guard is really protecting."""
+    return int(
+        (
+            await session.execute(
+                text('SELECT count(*) FROM "user" WHERE is_platform_admin IS TRUE')
+            )
+        ).scalar_one()
+    )
+
+
+async def signup(client: AsyncClient, email: str = "ordinary@example.com") -> Any:
+    """An ordinary tenant account — no platform flag anywhere on it."""
+    return await client.post(
+        "/auth/signup",
+        json={"email": email, "password": "a-perfectly-fine-passphrase", "tenantName": "Acme"},
+    )
+
+
+# -- the outer guard: any administrator at all ---------------------------------------
+
+
+async def test_a_new_address_does_not_mint_a_second_administrator(
+    session: AsyncSession, config_override: Callable[..., None]
+) -> None:
+    """Repointing the environment at a new address on a live deployment must create nothing.
+
+    This is the case the by-email check alone could not catch, and the reason it looked safe: every
+    individual run was idempotent, so the extra administrator only appeared when somebody edited a
+    configuration file — which is exactly when nobody is looking at the account list.
+    """
+    config_override(ADMIN_BOOTSTRAP_EMAIL=EMAIL, ADMIN_BOOTSTRAP_PASSWORD=HANDOVER)
+    assert (await ensure_bootstrap_admin(session)).created is True
+
+    config_override(
+        ADMIN_BOOTSTRAP_EMAIL="someone-else@example.com", ADMIN_BOOTSTRAP_PASSWORD=HANDOVER
+    )
+    result = await ensure_bootstrap_admin(session)
+
+    assert result.created is False
+    assert result.reason == "an administrator already exists"
+    assert await TenantService(session).find_by_email("someone-else@example.com") is None
+    assert await admin_count(session) == 1
+
+
+async def test_an_ordinary_user_is_not_an_administrator(
+    client: AsyncClient, session: AsyncSession, configured: None
+) -> None:
+    """The guard asks for platform staff, not for any account.
+
+    A deployment full of ordinary tenants still has nobody who can administer it, which is the
+    situation the bootstrap exists for. Reading "is the user table empty" instead would leave such
+    a deployment permanently unadministered.
+    """
+    await signup(client)
+    assert await admin_count(session) == 0
+
+    result = await ensure_bootstrap_admin(session)
+
+    assert result.created is True
+    assert await admin_count(session) == 1
+
+
+async def test_a_tenant_user_on_the_configured_address_is_still_not_overwritten(
+    client: AsyncClient, session: AsyncSession, config_override: Callable[..., None]
+) -> None:
+    """Both guards are load-bearing.
+
+    With no administrator anywhere the outer guard passes, and the by-email check is the only thing
+    standing between an ordinary account and a bootstrap that would provision over it.
+    """
+    taken = "already-a-user@example.com"
+    await signup(client, email=taken)
+    config_override(ADMIN_BOOTSTRAP_EMAIL=taken, ADMIN_BOOTSTRAP_PASSWORD=HANDOVER)
+
+    result = await ensure_bootstrap_admin(session)
+
+    assert result.created is False
+    assert result.reason == "already exists"
+    assert await admin_count(session) == 0, "an existing account is never promoted to staff"
 
 
 # -- creating it ---------------------------------------------------------------------
@@ -127,7 +211,7 @@ async def test_running_it_twice_creates_one_account(
     second = await ensure_bootstrap_admin(session)
 
     assert second.created is False
-    assert second.reason == "already exists"
+    assert second.reason == "an administrator already exists"
 
     count = (
         await session.execute(
