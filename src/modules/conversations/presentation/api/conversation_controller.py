@@ -164,8 +164,12 @@ async def send_message(
     response_model=PaginatedResponse[ConversationSummaryResponse],
     summary="List conversations",
     description=(
-        "Lists your tenant's conversations, most recently active first. Filter by `agentId` or by "
-        "`status` to find escalated conversations waiting on a human."
+        "Lists your tenant's conversations, most recently active first. Filter by `agentId`, by "
+        "`status` to find escalated conversations waiting on a human, or by `channel` to separate "
+        "builder test threads from real customer traffic.\n\n"
+        "`channel=preview` is how the builder finds the agent's own test conversation: without it, "
+        "the most recent thread for an agent is whichever channel spoke last, which may well be a "
+        "live customer."
     ),
     responses={
         200: {"description": "A page of conversations."},
@@ -182,8 +186,14 @@ async def list_conversations(
     status: Annotated[
         ConversationStatus | None, Query(description="Only conversations in this state.")
     ] = None,
+    channel: Annotated[
+        Channel | None,
+        Query(description="Only conversations on this channel, such as `preview` or `whatsapp`."),
+    ] = None,
 ) -> PaginatedResponse[ConversationSummaryResponse]:
-    result = await service.list_conversations(page, agent_id=agent_id, status=status)
+    result = await service.list_conversations(
+        page, agent_id=agent_id, status=status, channel=channel
+    )
     return PaginatedResponse.of(
         items=[_summary(conversation) for conversation in result.items],
         page=result.page,

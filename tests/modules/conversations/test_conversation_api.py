@@ -14,7 +14,9 @@ from typing import Any
 import pytest
 from fastapi import FastAPI
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.modules.conversations.domain.models import Channel
 from src.modules.conversations.domain.services import ConversationService
 from src.modules.conversations.presentation.api.conversation_controller import (
     get_conversation_service,
@@ -187,6 +189,51 @@ async def test_conversations_can_be_listed_and_filtered(
     assert everything["meta"]["totalItems"] == 2
     assert filtered["meta"]["totalItems"] == 1
     assert filtered["value"][0]["agentId"] == first["id"]
+
+
+async def test_conversations_can_be_filtered_by_channel(
+    client: AsyncClient, wired: FastAPI, session: AsyncSession, llm: RecordingLLM
+) -> None:
+    """The filter the builder's preview depends on.
+
+    An agent that is live has traffic on more than one channel, and "its most recent conversation"
+    is then whichever channel spoke last. A preview screen resuming that would reopen a customer's
+    thread in the builder — so the channel has to be part of the question, not an afterthought.
+    """
+    auth = await headers(client)
+    agent = await published_agent(client, auth)
+    await send(client, auth, agent["id"], "Testing from the builder")
+
+    # A real customer on the web widget, made through the service because the tenant route is
+    # preview-only by design.
+    await ConversationService(session, uuid.UUID(agent["tenantId"]), llm_client=llm).send_message(  # type: ignore[arg-type]
+        agent_id=uuid.UUID(agent["id"]),
+        content="Hello from a customer",
+        channel=Channel.WEB,
+        external_user_id="a-real-visitor",
+    )
+    await session.commit()
+
+    everything = (await client.get(f"/conversations?agentId={agent['id']}", headers=auth)).json()
+    preview = (
+        await client.get(f"/conversations?agentId={agent['id']}&channel=preview", headers=auth)
+    ).json()
+
+    assert everything["meta"]["totalItems"] == 2
+    assert preview["meta"]["totalItems"] == 1
+    assert preview["value"][0]["channel"] == "preview"
+    assert preview["value"][0]["externalUserId"] == "preview"
+
+
+async def test_an_unknown_channel_is_rejected_rather_than_ignored(
+    client: AsyncClient, wired: FastAPI
+) -> None:
+    """A filter nobody validates is a filter that silently returns everything."""
+    auth = await headers(client)
+
+    response = await client.get("/conversations?channel=carrier-pigeon", headers=auth)
+
+    assert response.status_code == 422
 
 
 # -- guardrails and lifecycle --------------------------------------------------------------
