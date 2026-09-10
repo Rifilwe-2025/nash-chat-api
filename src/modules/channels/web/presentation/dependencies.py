@@ -10,11 +10,13 @@ step — which is why the checks are ordered deliberately:
    a caller: distinguishing "no such key" from "revoked" hands out a map of the key space.
 3. **The rate limit is counted** — after authentication, so an unauthenticated flood cannot consume
    a real key's allowance, and per key rather than per IP, because that is what a tenant is sold.
-4. **The scope is checked** by the route, since it differs per route.
+4. **The browser origin is checked**, when there is one, against the web channel's allowlist.
+5. **The scope is checked** by the route, since it differs per route.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Depends, Header, Request
@@ -24,7 +26,7 @@ from src.core.rate_limit import RateLimiter, build_limiter
 from src.modules.api_keys.domain.models import ApiKeyScope
 from src.modules.api_keys.domain.services import ApiKeyService, AuthenticatedKey
 from src.modules.channels.domain.services import ChannelService
-from src.modules.conversations.domain.services import ConversationService
+from src.modules.conversations.domain.services import ConversationService, StreamedTurn
 from src.modules.tools.presentation.dependencies import ToolCacheDep
 from src.shared.database.dependencies import SessionDep
 from src.shared.exceptions import RateLimitedException, UnauthorizedException
@@ -92,20 +94,6 @@ async def get_api_caller(
 ApiCallerDep = Annotated[AuthenticatedKey, Depends(get_api_caller)]
 
 
-def require_chat_write(caller: ApiCallerDep) -> AuthenticatedKey:
-    ApiKeyService.require_scope(caller, ApiKeyScope.CHAT_WRITE)
-    return caller
-
-
-def require_chat_read(caller: ApiCallerDep) -> AuthenticatedKey:
-    ApiKeyService.require_scope(caller, ApiKeyScope.CHAT_READ)
-    return caller
-
-
-ChatWriteDep = Annotated[AuthenticatedKey, Depends(require_chat_write)]
-ChatReadDep = Annotated[AuthenticatedKey, Depends(require_chat_read)]
-
-
 def get_chat_conversations(
     session: SessionDep, caller: ApiCallerDep, tool_cache: ToolCacheDep
 ) -> ConversationService:
@@ -123,3 +111,55 @@ def get_chat_channels(session: SessionDep, caller: ApiCallerDep) -> ChannelServi
 
 ChatConversationsDep = Annotated[ConversationService, Depends(get_chat_conversations)]
 ChatChannelsDep = Annotated[ChannelService, Depends(get_chat_channels)]
+
+
+async def require_allowed_origin(
+    request: Request, caller: ApiCallerDep, channels: ChatChannelsDep
+) -> None:
+    """Every chat route, reads included: an embedding the tenant has not allowed gets nothing."""
+    await channels.assert_origin_allowed(caller.agent.id, request.headers.get("origin"))
+
+
+AllowedOriginDep = Annotated[None, Depends(require_allowed_origin)]
+
+
+def require_chat_write(caller: ApiCallerDep, _origin: AllowedOriginDep) -> AuthenticatedKey:
+    ApiKeyService.require_scope(caller, ApiKeyScope.CHAT_WRITE)
+    return caller
+
+
+def require_chat_read(caller: ApiCallerDep, _origin: AllowedOriginDep) -> AuthenticatedKey:
+    ApiKeyService.require_scope(caller, ApiKeyScope.CHAT_READ)
+    return caller
+
+
+ChatWriteDep = Annotated[AuthenticatedKey, Depends(require_chat_write)]
+ChatReadDep = Annotated[AuthenticatedKey, Depends(require_chat_read)]
+
+
+class StreamSettler:
+    """Where a streaming route leaves the turn it started, for :func:`get_stream_settler`."""
+
+    def __init__(self) -> None:
+        self.turn: StreamedTurn | None = None
+
+
+async def get_stream_settler(session: SessionDep) -> AsyncIterator[StreamSettler]:
+    """Settle the streamed turn once the response is over, and before the session commits.
+
+    A streaming response outlives its route: the reply is written while the body is being sent,
+    after the route has returned. When the visitor leaves part-way the server stops sending and the
+    stream never runs again, so whatever it had written would never be stored.
+
+    This dependency's exit is the one place left to store it. It runs after the response, like
+    every request-scoped dependency, and — because it depends on the session — before the session's
+    own exit commits. It is skipped when the request failed, since that transaction is rolled back
+    and there is nothing to add to it.
+    """
+    settler = StreamSettler()
+    yield settler
+    if settler.turn is not None:
+        await settler.turn.settle()
+
+
+StreamSettlerDep = Annotated[StreamSettler, Depends(get_stream_settler)]

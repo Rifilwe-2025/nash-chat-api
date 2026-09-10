@@ -11,10 +11,10 @@ through ``get_provider``, so the day that decision is made it is a lookup change
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 
 from src import configs
-from src.shared.llm.base import CompletionRequest, CompletionResult, LLMProvider
+from src.shared.llm.base import CompletionRequest, CompletionResult, LLMProvider, TextStream
 from src.shared.llm.errors import (
     LLMConfigurationError,
     LLMError,
@@ -86,7 +86,7 @@ class LLMClient:
         provider: str,
         request: CompletionRequest,
         api_key: str | None = None,
-    ) -> AsyncIterator[str]:
+    ) -> TextStream:
         """Streaming has no retry: bytes already sent to the client cannot be un-sent."""
         return self._build(provider, api_key).stream(request)
 

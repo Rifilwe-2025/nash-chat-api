@@ -19,6 +19,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src import configs
 from src.modules.agents.domain.services import AgentService
 from src.modules.channels.domain.messages import IncomingMessage, OutgoingMessage
 from src.modules.channels.domain.models import (
@@ -33,11 +34,16 @@ from src.modules.channels.domain.repositories import (
     ChannelConfigRepository,
     WebhookEndpointRepository,
 )
-from src.modules.channels.internal import webhooks
-from src.modules.conversations.domain.models import Channel
-from src.modules.conversations.domain.services import ConversationService, TurnResult
+from src.modules.channels.internal import origins, webhooks
+from src.modules.conversations.domain.models import Channel, Conversation
+from src.modules.conversations.domain.services import ConversationService, StreamedTurn
 from src.shared.database.pagination import Page, PageRequest
-from src.shared.exceptions import ConflictException, NotFoundException, ValidationException
+from src.shared.exceptions import (
+    ConflictException,
+    ForbiddenException,
+    NotFoundException,
+    ValidationException,
+)
 
 logger = logging.getLogger("api.channels")
 
@@ -73,9 +79,9 @@ class ChannelService:
         )
 
         if existing is None:
-            await self.emit(WebhookEvent.CONVERSATION_STARTED, result)
+            await self.emit(WebhookEvent.CONVERSATION_STARTED, result.conversation)
         if result.escalated:
-            await self.emit(WebhookEvent.CONVERSATION_ESCALATED, result)
+            await self.emit(WebhookEvent.CONVERSATION_ESCALATED, result.conversation)
 
         return OutgoingMessage(
             conversation_id=result.conversation.id,
@@ -84,13 +90,40 @@ class ChannelService:
             citations=list(result.reply.citations_json),
         )
 
+    async def handle_stream(
+        self, incoming: IncomingMessage, conversations: ConversationService
+    ) -> StreamedTurn:
+        """The streamed twin of :meth:`handle`: the same session, the same events, reply to come.
+
+        Both events are already known before the first token — a new conversation exists, and an
+        escalation is a guardrail's verdict, reached before any model is called — so they are
+        emitted here rather than after the stream, where a visitor leaving early would lose them.
+        """
+        channel = CHANNEL_MAP[incoming.channel]
+        existing = await conversations.conversations.find_open_session(
+            incoming.agent_id, channel, incoming.external_user_id
+        )
+
+        turn = await conversations.stream_message(
+            agent_id=incoming.agent_id,
+            content=incoming.text,
+            channel=channel,
+            external_user_id=incoming.external_user_id,
+        )
+
+        if existing is None:
+            await self.emit(WebhookEvent.CONVERSATION_STARTED, turn.conversation)
+        if turn.escalated:
+            await self.emit(WebhookEvent.CONVERSATION_ESCALATED, turn.conversation)
+        return turn
+
     # -- webhook emission ----------------------------------------------------
 
-    async def emit(self, event: WebhookEvent, result: TurnResult) -> None:
+    async def emit(self, event: WebhookEvent, conversation: Conversation) -> None:
         """Deliver an event to every endpoint subscribed to it, without blocking the turn."""
         endpoints = [
             endpoint
-            for endpoint in await self.endpoints.active_for_agent(result.conversation.agent_id)
+            for endpoint in await self.endpoints.active_for_agent(conversation.agent_id)
             if endpoint.subscribes_to(event)
         ]
         if not endpoints:
@@ -99,13 +132,13 @@ class ChannelService:
         payload = webhooks.build_payload(
             event.value,
             {
-                "conversationId": str(result.conversation.id),
-                "agentId": str(result.conversation.agent_id),
+                "conversationId": str(conversation.id),
+                "agentId": str(conversation.agent_id),
                 "tenantId": str(self.tenant_id),
-                "channel": result.conversation.channel.value,
-                "externalUserId": result.conversation.external_user_id,
-                "status": result.conversation.status.value,
-                "escalationReason": result.conversation.escalation_reason,
+                "channel": conversation.channel.value,
+                "externalUserId": conversation.external_user_id,
+                "status": conversation.status.value,
+                "escalationReason": conversation.escalation_reason,
             },
         )
 
@@ -199,6 +232,8 @@ class ChannelService:
     ) -> ChannelConfig:
         """Create or update an agent's settings for one channel."""
         agent = await self.agents.get(agent_id)
+        if channel_type is ChannelType.WEB and settings is not None:
+            settings = self._web_settings(settings)
         existing = await self.configs.for_agent(agent.id, channel_type)
 
         if existing is not None:
@@ -246,6 +281,61 @@ class ChannelService:
                 f"The {channel_type.value} channel is disabled for this agent.",
                 code="CHANNEL_DISABLED",
             )
+
+    async def assert_origin_allowed(self, agent_id: uuid.UUID, origin: str | None) -> None:
+        """Refuse a browser request from an origin the web channel does not list.
+
+        Only a browser sends ``Origin``, and a page's script cannot change it, so this governs where
+        the agent can be *embedded* — it is not authentication. A server holding the key sends no
+        ``Origin`` at all and is unaffected; the key is still the credential.
+
+        An empty list restricts nothing, which is how every channel starts. The platform's own
+        console origins are always allowed, so a tenant who locks the agent to their site can still
+        test it from the sandbox.
+        """
+        if origin is None:
+            return
+
+        config = await self.configs.for_agent(agent_id, ChannelType.WEB)
+        allowed = origins.configured(config.settings_json if config else None)
+        if not allowed or origins.is_allowed(origin, [*allowed, *configs.CORS_ALLOW_ORIGINS]):
+            return
+
+        raise ForbiddenException(
+            "This agent does not accept requests from this origin. Add it to the web channel's "
+            "allowed origins.",
+            code="ORIGIN_NOT_ALLOWED",
+        )
+
+    def _web_settings(self, settings: dict[str, object]) -> dict[str, object]:
+        """Validate the web channel's allowlist, and store it normalised for exact matching."""
+        raw = settings.get(origins.SETTING)
+        if raw is None:
+            return settings
+        if not isinstance(raw, list) or not all(isinstance(entry, str) for entry in raw):
+            raise ValidationException(
+                "`allowedOrigins` must be a list of origins, such as https://example.com.",
+                code="INVALID_ORIGIN",
+            )
+
+        normalised: list[str] = []
+        rejected: list[str] = []
+        for entry in raw:
+            if not entry.strip():
+                continue
+            try:
+                normalised.append(origins.normalise(entry))
+            except origins.InvalidOriginError:
+                rejected.append(entry)
+
+        if rejected:
+            raise ValidationException(
+                f"Not an origin: {', '.join(rejected)}. An origin is a scheme and a host with no "
+                "path, such as https://example.com.",
+                code="INVALID_ORIGIN",
+            )
+        # Deduplicated in the order given, so the list reads back the way it was typed.
+        return {**settings, origins.SETTING: list(dict.fromkeys(normalised))}
 
     def _validate_events(self, events: list[str]) -> list[str]:
         known = {event.value for event in WebhookEvent}

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-
 import pytest
 
 from src.shared.llm import registry
-from src.shared.llm.base import CompletionRequest, CompletionResult, LLMProvider, TokenUsage
+from src.shared.llm.base import (
+    CompletionRequest,
+    CompletionResult,
+    LLMProvider,
+    TextStream,
+    TokenUsage,
+)
 from src.shared.llm.errors import (
     LLMAuthenticationError,
     LLMBadRequestError,
@@ -43,7 +47,7 @@ class ProbeProvider(LLMProvider):
             provider=self.name,
         )
 
-    def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
+    def stream(self, request: CompletionRequest) -> TextStream:
         raise NotImplementedError("a probe never streams")
 
 

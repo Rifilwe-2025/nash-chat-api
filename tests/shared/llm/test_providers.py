@@ -76,6 +76,27 @@ async def test_every_adapter_streams_text_deltas(provider_name: str) -> None:
     assert "".join(chunks) == "Hello"
 
 
+@pytest.mark.parametrize("provider_name", sorted(BUILDERS))
+async def test_every_adapter_reports_usage_once_a_stream_ends(provider_name: str) -> None:
+    """A streamed reply is billed like any other, so its usage has to be recorded like any other."""
+    stream = BUILDERS[provider_name]().stream(REQUEST)
+    assert stream.usage.total_tokens == 0, "nothing is known before the stream has run"
+
+    _ = [chunk async for chunk in stream]
+
+    assert stream.usage.prompt_tokens > 0
+    assert stream.usage.completion_tokens > 0
+
+
+async def test_openai_is_asked_to_report_usage_on_a_stream() -> None:
+    """Without the flag OpenAI's stream carries no usage at all, and the turn would record zero."""
+    client = FakeOpenAIClient()
+
+    _ = [chunk async for chunk in OpenAIProvider(client=client).stream(REQUEST)]
+
+    assert client.recorder.last["stream_options"] == {"include_usage": True}
+
+
 # -- provider-specific normalisation ---------------------------------------------
 
 

@@ -11,12 +11,13 @@ product: §10 requires that they can do it without reading the source or asking 
 from __future__ import annotations
 
 import uuid
+from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import Path, Query
 from fastapi.responses import StreamingResponse
 
-from src.core.sse import sse_response
+from src.core.sse import format_json_event, sse_response
 from src.modules.channels.domain.messages import IncomingMessage
 from src.modules.channels.domain.models import ChannelType
 from src.modules.channels.web.presentation.dependencies import (
@@ -24,6 +25,7 @@ from src.modules.channels.web.presentation.dependencies import (
     ChatConversationsDep,
     ChatReadDep,
     ChatWriteDep,
+    StreamSettlerDep,
 )
 from src.modules.channels.web.presentation.dtos.chat import (
     ChatMessageResponse,
@@ -32,6 +34,7 @@ from src.modules.channels.web.presentation.dtos.chat import (
     SendChatMessageRequest,
 )
 from src.modules.conversations.domain.models import Channel, Message
+from src.modules.conversations.domain.services import StreamedTurn
 from src.shared.database.pagination import PageParamsDep
 from src.shared.exceptions import NotFoundException
 from src.shared.responses import ApiResponse, PaginatedResponse, create_router
@@ -48,9 +51,19 @@ UNAUTHORIZED = {
 }
 FORBIDDEN = {
     "description": (
-        "The key lacks the scope this route needs (`INSUFFICIENT_SCOPE`), or the agent is no "
-        "longer published (`AGENT_NOT_PUBLISHED`)."
+        "The key lacks the scope this route needs (`INSUFFICIENT_SCOPE`), the agent is no longer "
+        "published (`AGENT_NOT_PUBLISHED`), or a browser sent the request from an origin the web "
+        "channel does not allow (`ORIGIN_NOT_ALLOWED`)."
     )
+}
+UNAVAILABLE = {
+    "description": (
+        "The agent's model could not be reached (`PROVIDER_UNAVAILABLE`) or the web "
+        "channel is disabled for this agent (`CHANNEL_DISABLED`)."
+    )
+}
+INVALID_MESSAGE = {
+    "description": "The message is empty or too long (`EMPTY_MESSAGE`, `MESSAGE_TOO_LONG`)."
 }
 RATE_LIMITED = {
     "description": (
@@ -66,6 +79,27 @@ def _message(message: Message) -> ChatMessageResponse:
         role=message.role,
         content=message.content,
         created_at=message.created_at,
+    )
+
+
+async def _frames(turn: StreamedTurn) -> AsyncIterator[str]:
+    """A ``delta`` per piece of the reply, then ``done`` — or ``error``, if it was cut short."""
+    async for delta in turn.deltas:
+        yield format_json_event({"delta": delta}, event="delta")
+
+    if turn.failure is not None:
+        yield format_json_event(
+            {"code": turn.failure.code, "detail": turn.failure.detail}, event="error"
+        )
+        return
+
+    yield format_json_event(
+        {
+            "done": True,
+            "conversationId": str(turn.conversation.id),
+            "escalated": turn.escalated,
+        },
+        event="done",
     )
 
 
@@ -92,17 +126,8 @@ def _message(message: Message) -> ChatMessageResponse:
         201: {"description": "The agent's reply."},
         401: UNAUTHORIZED,
         403: FORBIDDEN,
-        409: {
-            "description": (
-                "The agent's model could not be reached (`PROVIDER_UNAVAILABLE`) or the web "
-                "channel is disabled for this agent (`CHANNEL_DISABLED`)."
-            )
-        },
-        422: {
-            "description": (
-                "The message is empty or too long (`EMPTY_MESSAGE`, `MESSAGE_TOO_LONG`)."
-            )
-        },
+        409: UNAVAILABLE,
+        422: INVALID_MESSAGE,
         429: RATE_LIMITED,
     },
 )
@@ -139,22 +164,39 @@ async def send_message(
     description=(
         "The same turn as `/v1/chat/messages`, streamed as **server-sent events** so a widget can "
         "render the reply as it is written. Requires the `chat:write` scope.\n\n"
-        'Frames are `event: delta` with `{"delta": "..."}` for each piece of text, then a final '
-        '`event: done` with `{"done": true}`. Concatenating every `delta` gives the same reply '
-        "the non-streaming endpoint returns.\n\n"
+        "Three kinds of frame:\n\n"
+        '- `event: delta` — `{"delta": "..."}` for each piece of text, in order. Concatenating '
+        "every delta gives the same reply the non-streaming endpoint returns.\n"
+        '- `event: done` — `{"done": true, "conversationId": "...", "escalated": false}` once '
+        "the reply is complete. `escalated` means what it does on `/v1/chat/messages`: a "
+        "guardrail has handed the conversation to a human, and the agent will not answer "
+        "further messages in it.\n"
+        '- `event: error` — `{"code": "PROVIDER_UNAVAILABLE", "detail": "..."}` **instead of** '
+        "`done`, when the model fails part-way. The deltas already sent are all there will be; "
+        "sending the message again is safe.\n\n"
+        "A request refused before streaming starts — a bad key, a disallowed origin, a disabled "
+        "channel — gets the ordinary JSON error envelope and status code, never a stream.\n\n"
+        "The conversation id is also sent in the `X-Conversation-Id` header, before the first "
+        "frame.\n\n"
         "**The turn is still stored** — history, tokens and citations are recorded exactly as they "
-        "are for a non-streamed message.\n\n"
+        "are for a non-streamed message, and what was written is kept even when the caller "
+        "disconnects part-way.\n\n"
         "A guardrail reply (a restricted topic, or an escalation) arrives as a single delta: there "
         "is no model call to stream, and the answer was already decided."
     ),
     response_class=StreamingResponse,
     responses={
         200: {
-            "description": "An `text/event-stream` of `delta` frames followed by `done`.",
+            "description": (
+                "A `text/event-stream` of `delta` frames, ending in `done` or, if the model "
+                "failed part-way, `error`."
+            ),
             "content": {"text/event-stream": {"schema": {"type": "string"}}},
         },
         401: UNAUTHORIZED,
         403: FORBIDDEN,
+        409: UNAVAILABLE,
+        422: INVALID_MESSAGE,
         429: RATE_LIMITED,
     },
 )
@@ -163,16 +205,21 @@ async def stream_message(
     caller: ChatWriteDep,
     channels: ChatChannelsDep,
     conversations: ChatConversationsDep,
+    settler: StreamSettlerDep,
 ) -> StreamingResponse:
     await channels.assert_channel_enabled(caller.agent.id, ChannelType.WEB)
 
-    conversation, deltas = await conversations.stream_message(
-        agent_id=caller.agent.id,
-        content=payload.message,
-        channel=Channel.WEB,
-        external_user_id=payload.user_id,
+    turn = await channels.handle_stream(
+        IncomingMessage(
+            agent_id=caller.agent.id,
+            channel=ChannelType.WEB.value,
+            external_user_id=payload.user_id,
+            text=payload.message,
+        ),
+        conversations,
     )
-    return sse_response(deltas, headers={"X-Conversation-Id": str(conversation.id)})
+    settler.turn = turn
+    return sse_response(_frames(turn), headers={"X-Conversation-Id": str(turn.conversation.id)})
 
 
 @router.get(

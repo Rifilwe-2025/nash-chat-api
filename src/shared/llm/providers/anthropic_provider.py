@@ -24,6 +24,7 @@ from src.shared.llm.base import (
     CompletionResult,
     LLMProvider,
     Role,
+    TextStream,
     TokenUsage,
     ToolCall,
 )
@@ -199,14 +200,22 @@ class AnthropicProvider(LLMProvider):
             raw_finish_reason=response.stop_reason,
         )
 
-    def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
+    def stream(self, request: CompletionRequest) -> TextStream:
+        stream = TextStream()
+
         async def iterator() -> AsyncIterator[str]:
             with _translated(self.name):
-                async with self._client.messages.stream(**self._payload(request)) as stream:
-                    async for text in stream.text_stream:
+                async with self._client.messages.stream(**self._payload(request)) as response:
+                    async for text in response.text_stream:
                         yield text
+                    # The accumulated message carries the whole call's usage once the text ends.
+                    final = await response.get_final_message()
+                    stream.usage = TokenUsage(
+                        prompt_tokens=final.usage.input_tokens,
+                        completion_tokens=final.usage.output_tokens,
+                    )
 
-        return iterator()
+        return stream.attach(iterator())
 
     async def aclose(self) -> None:
         close = getattr(self._client, "close", None)

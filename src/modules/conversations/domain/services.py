@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
+import anyio
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import configs
@@ -92,6 +94,48 @@ class TurnResult:
         # What the turn looked up, if anything. Channels do not use it yet; the conversation API
         # surfaces it so a tenant can see which answers came from a live call.
         self.tool_calls = tool_calls or []
+
+
+@dataclass(frozen=True, slots=True)
+class StreamFailure:
+    """Why a streamed reply stopped before it was finished, in an error response's own terms."""
+
+    code: str
+    detail: str
+
+
+class StreamedTurn:
+    """A turn whose reply is still being written.
+
+    Handed back before the first token, so the caller already has the conversation — and whether a
+    guardrail escalated it, which is settled before any model is called — while ``deltas`` is still
+    unread. Once ``deltas`` is exhausted, ``failure`` says whether the reply was cut short.
+
+    ``settle`` is what makes a stream safe to abandon. A visitor who closes the tab stops the
+    iteration wherever it happened to be, and nothing after that point runs; ``settle`` stores what
+    had been written by then, marked as cut off, and closes the provider's stream. It is idempotent,
+    so settling a stream that finished normally changes nothing.
+    """
+
+    def __init__(
+        self,
+        conversation: Conversation,
+        deltas: AsyncIterator[str],
+        escalated: bool = False,
+        on_settle: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        self.conversation = conversation
+        self.deltas = deltas
+        self.escalated = escalated
+        self.failure: StreamFailure | None = None
+        self._on_settle = on_settle
+
+    async def settle(self) -> None:
+        close = getattr(self.deltas, "aclose", None)
+        if close is not None:
+            await close()
+        if self._on_settle is not None:
+            await self._on_settle()
 
 
 class ConversationService:
@@ -223,20 +267,19 @@ class ConversationService:
         content: str,
         channel: Channel = Channel.PREVIEW,
         external_user_id: str = "preview",
-    ) -> tuple[Conversation, AsyncIterator[str]]:
-        """Run a turn, yielding the reply as it is written.
+    ) -> StreamedTurn:
+        """Run a turn, handing back its reply as it is written.
 
-        Returns the conversation *and* an iterator, rather than being a generator itself, so the
-        caller has the conversation id before the first token — a widget needs it to attach the
-        stream to the right thread.
+        Returns a :class:`StreamedTurn` rather than being a generator itself, so the caller has the
+        conversation id and the escalation verdict before the first token — a widget needs the one
+        to attach the stream to the right thread, and the other to stop sending.
 
         A guardrail reply is not streamed from anywhere: the answer was decided in code, so it
         arrives as one chunk. The caller cannot tell the difference, which is the point.
 
-        **Streamed turns record no token usage.** The providers' streaming APIs do not report it,
-        and the abstraction will not invent numbers it was not given. The message is stored with a
-        ``streamed`` marker so analytics can tell why the counts are zero rather than reading it as
-        a free call.
+        A streamed reply costs what a buffered one does, so it is stored with the usage the
+        provider reported at the end of the stream — and with a ``streamed`` marker, so a zero can
+        still be told apart from a free call when a stream ended before the provider reported.
         """
         message = self._validated(content)
         agent = await self._agent_for_turn(agent_id, channel)
@@ -265,7 +308,7 @@ class ConversationService:
             )
             if escalating:
                 await self._escalate(conversation, decision.reason or "Escalation trigger matched.")
-            return conversation, _single_chunk(text)
+            return StreamedTurn(conversation, _single_chunk(text), escalated=escalating)
 
         request, provider, api_key, retrieval, history_turns = await self._prepare(
             agent, conversation, message
@@ -279,13 +322,13 @@ class ConversationService:
             # call means a stream that ends with no text when the model chooses one, and dropping
             # the tools means a published agent that silently loses its lookups on the widget.
             result = await self._answer(agent, conversation, user_message, message)
-            return conversation, _single_chunk(result.reply.content)
+            return StreamedTurn(conversation, _single_chunk(result.reply.content))
 
-        return conversation, self._stream_and_store(
+        return self._stream_and_store(
             conversation, provider, api_key, request, retrieval, history_turns
         )
 
-    async def _stream_and_store(
+    def _stream_and_store(
         self,
         conversation: Conversation,
         provider: str,
@@ -293,36 +336,71 @@ class ConversationService:
         request: CompletionRequest,
         retrieval: RetrievalResult,
         history_turns: int,
-    ) -> AsyncIterator[str]:
-        """Yield deltas, then store the assembled reply once the stream ends."""
-        pieces: list[str] = []
-        try:
-            async for delta in self._llm.stream(provider, request, api_key=api_key):
-                pieces.append(delta)
-                yield delta
-        except LLMError as exc:
-            # Bytes already sent cannot be un-sent, so this cannot become a 4xx. The client is told
-            # in band, and the partial text is still stored — a half answer in the transcript is
-            # more use to whoever investigates than a gap.
-            logger.warning("streamed provider call failed: %s", exc)
-            yield "\n\n[The reply was interrupted. Please try again.]"
+    ) -> StreamedTurn:
+        """Stream the reply, and store it exactly once however the stream ends.
 
-        text = "".join(pieces).strip()
-        if text:
-            await self._store(
-                conversation,
-                MessageRole.ASSISTANT,
-                text,
-                provider=provider,
-                model=request.model,
-                citations=self._citations(retrieval),
-                meta={
-                    "tier": retrieval.tier.value,
-                    "hasContext": retrieval.has_context,
-                    "historyTurns": history_turns,
-                    "streamed": True,
-                },
-            )
+        Three endings, one stored message. The stream finishes. The provider fails part-way, and the
+        caller learns it from ``failure`` rather than from text pretending to be part of the reply.
+        Or the caller stops reading, and ``settle`` stores what had arrived. Bytes already sent
+        cannot be un-sent, so a partial reply is kept either way — half an answer in the transcript
+        is more use to whoever investigates than a gap.
+        """
+        source = self._llm.stream(provider, request, api_key=api_key)
+        pieces: list[str] = []
+        stored = False
+
+        async def store(**ending: bool) -> None:
+            nonlocal stored
+            if stored:
+                return
+            stored = True
+            text = "".join(pieces).strip()
+            if not text:
+                return
+            # Shielded: a visitor leaving mid-write must not cancel the write that records what
+            # they were shown.
+            with anyio.CancelScope(shield=True):
+                await self._store(
+                    conversation,
+                    MessageRole.ASSISTANT,
+                    text,
+                    provider=provider,
+                    model=request.model,
+                    prompt_tokens=source.usage.prompt_tokens,
+                    completion_tokens=source.usage.completion_tokens,
+                    citations=self._citations(retrieval),
+                    meta={
+                        "tier": retrieval.tier.value,
+                        "hasContext": retrieval.has_context,
+                        "historyTurns": history_turns,
+                        "streamed": True,
+                        **ending,
+                    },
+                )
+
+        async def deltas() -> AsyncIterator[str]:
+            try:
+                async for delta in source:
+                    pieces.append(delta)
+                    yield delta
+            except LLMError as exc:
+                logger.warning("streamed provider call failed: %s", exc)
+                turn.failure = StreamFailure(
+                    code="PROVIDER_UNAVAILABLE",
+                    detail="The reply was interrupted. Please try again.",
+                )
+                await store(interrupted=True)
+                return
+            await store()
+
+        async def settle() -> None:
+            if stored:
+                return
+            await source.aclose()
+            await store(clientDisconnected=True)
+
+        turn = StreamedTurn(conversation, deltas(), on_settle=settle)
+        return turn
 
     def _validated(self, content: str) -> str:
         message = content.strip()
@@ -582,18 +660,7 @@ class ConversationService:
                 )
             return conversation
 
-        existing = await self.conversations.find_open_session(agent.id, channel, external_user_id)
-        if existing is not None:
-            return existing
-
-        return await self.conversations.add(
-            Conversation(
-                agent_id=agent.id,
-                channel=channel,
-                external_user_id=external_user_id,
-                status=ConversationStatus.ACTIVE,
-            )
-        )
+        return await self.conversations.open_session(agent.id, channel, external_user_id)
 
     async def _escalate(self, conversation: Conversation, reason: str) -> Conversation:
         if conversation.status is ConversationStatus.ESCALATED:

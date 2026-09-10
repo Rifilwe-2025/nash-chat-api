@@ -12,6 +12,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine
 from typing import Any
 
+import anyio
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +33,7 @@ from src.modules.knowledge_base.domain.services import KnowledgeBaseService
 from src.modules.tenants.domain.models import Tenant
 from src.shared.database.pagination import PageRequest
 from src.shared.exceptions import ConflictException, ValidationException
-from src.shared.llm import CompletionRequest, CompletionResult, TokenUsage
+from src.shared.llm import CompletionRequest, CompletionResult, TextStream, TokenUsage
 from src.shared.llm.errors import LLMUnavailableError
 
 RETURNS = (
@@ -62,17 +63,21 @@ class RecordingLLM:
             provider=provider,
         )
 
-    def stream(self, provider: str, request: CompletionRequest, api_key: str | None = None):  # type: ignore[no-untyped-def]
-        """Streamed deltas, split so a test sees more than one frame."""
+    def stream(
+        self, provider: str, request: CompletionRequest, api_key: str | None = None
+    ) -> TextStream:
+        """Streamed deltas, split so a test sees more than one frame, then the usage for them."""
         self.requests.append((provider, request))
         self.keys.append(api_key)
         words = self.reply.split(" ")
+        stream = TextStream()
 
         async def iterator() -> AsyncIterator[str]:
             for index, word in enumerate(words):
                 yield word if index == 0 else f" {word}"
+            stream.usage = TokenUsage(prompt_tokens=420, completion_tokens=35)
 
-        return iterator()
+        return stream.attach(iterator())
 
     @property
     def last(self) -> CompletionRequest:
@@ -84,6 +89,40 @@ class BrokenLLM(RecordingLLM):
         self, provider: str, request: CompletionRequest, api_key: str | None = None
     ) -> CompletionResult:
         raise LLMUnavailableError("upstream is down", provider=provider)
+
+
+class InterruptedLLM(RecordingLLM):
+    """Starts answering, then loses the provider part-way through the reply."""
+
+    def stream(
+        self, provider: str, request: CompletionRequest, api_key: str | None = None
+    ) -> TextStream:
+        self.requests.append((provider, request))
+        self.keys.append(api_key)
+
+        async def iterator() -> AsyncIterator[str]:
+            yield "Tinted paint is"
+            raise LLMUnavailableError("connection reset mid-stream", provider=provider)
+
+        return TextStream().attach(iterator())
+
+
+class LeavingLLM(RecordingLLM):
+    """Starts answering, then takes longer than any visitor waits — the tab is closed first."""
+
+    def stream(
+        self, provider: str, request: CompletionRequest, api_key: str | None = None
+    ) -> TextStream:
+        self.requests.append((provider, request))
+        self.keys.append(api_key)
+
+        async def iterator() -> AsyncIterator[str]:
+            yield "Tinted"
+            await anyio.sleep(0)
+            yield " paint"
+            await anyio.sleep_forever()
+
+        return TextStream().attach(iterator())
 
 
 @pytest.fixture
@@ -200,11 +239,98 @@ async def test_a_streamed_turn_uses_the_agents_key_too(
     agent = await build_agent(session, tenant, model_api_key="tenant-gemini-key")
     llm = RecordingLLM()
 
-    _, stream = await service(session, tenant, llm).stream_message(agent.id, "Hello")
-    async for _ in stream:
+    turn = await service(session, tenant, llm).stream_message(agent.id, "Hello")
+    async for _ in turn.deltas:
         pass
 
     assert llm.keys == ["tenant-gemini-key"]
+
+
+async def test_a_streamed_turn_records_the_usage_the_provider_reported(
+    session: AsyncSession, tenant: Tenant
+) -> None:
+    """A streamed reply costs what a buffered one does; recording zero would make it look free."""
+    agent = await build_agent(session, tenant)
+    engine = service(session, tenant, RecordingLLM())
+
+    turn = await engine.stream_message(agent.id, "Hello")
+    async for _ in turn.deltas:
+        pass
+
+    reply = (await engine.messages.history(turn.conversation.id))[-1]
+    assert reply.role is MessageRole.ASSISTANT
+    assert reply.prompt_tokens == 420
+    assert reply.completion_tokens == 35
+    assert reply.meta_json["streamed"] is True
+
+
+async def test_an_interrupted_stream_says_so_instead_of_writing_it_into_the_reply(
+    session: AsyncSession, tenant: Tenant
+) -> None:
+    """The failure used to arrive as text, indistinguishable from the agent's own words."""
+    agent = await build_agent(session, tenant)
+    engine = service(session, tenant, InterruptedLLM())
+
+    turn = await engine.stream_message(agent.id, "Can I return tinted paint?")
+    written = "".join([delta async for delta in turn.deltas])
+
+    assert written == "Tinted paint is"
+    assert turn.failure is not None
+    assert turn.failure.code == "PROVIDER_UNAVAILABLE"
+    reply = (await engine.messages.history(turn.conversation.id))[-1]
+    assert reply.content == "Tinted paint is", "what was shown is kept, and nothing more"
+    assert reply.meta_json["interrupted"] is True
+
+
+async def test_an_abandoned_stream_is_settled_with_what_had_been_written(
+    session: AsyncSession, tenant: Tenant
+) -> None:
+    """A visitor closing the tab stops the iteration; settling is what still stores the reply."""
+    agent = await build_agent(session, tenant)
+    engine = service(session, tenant, RecordingLLM())
+
+    turn = await engine.stream_message(agent.id, "Hello")
+    first = await anext(turn.deltas)
+    await turn.settle()
+    await turn.settle()
+
+    messages = await engine.messages.history(turn.conversation.id)
+    assert [message.content for message in messages] == ["Hello", first], "stored exactly once"
+    assert messages[-1].meta_json["clientDisconnected"] is True
+
+
+async def test_settling_a_stream_that_finished_changes_nothing(
+    session: AsyncSession, tenant: Tenant
+) -> None:
+    agent = await build_agent(session, tenant)
+    engine = service(session, tenant, RecordingLLM())
+
+    turn = await engine.stream_message(agent.id, "Hello")
+    async for _ in turn.deltas:
+        pass
+    await turn.settle()
+
+    messages = await engine.messages.history(turn.conversation.id)
+    assert len(messages) == 2
+    assert "clientDisconnected" not in messages[-1].meta_json
+
+
+async def test_a_streamed_escalation_is_known_before_the_stream_is_read(
+    session: AsyncSession, tenant: Tenant
+) -> None:
+    """A widget has to learn it is talking to nobody without waiting for the reply to finish."""
+    agent = await build_agent(
+        session, tenant, engagement_rules={"escalation_triggers": ["speak to a manager"]}
+    )
+    llm = RecordingLLM()
+
+    turn = await service(session, tenant, llm).stream_message(
+        agent.id, "Please let me speak to a manager"
+    )
+
+    assert turn.escalated is True
+    assert turn.conversation.status is ConversationStatus.ESCALATED
+    assert llm.requests == []
 
 
 async def test_token_usage_is_recorded_on_the_reply(session: AsyncSession, tenant: Tenant) -> None:

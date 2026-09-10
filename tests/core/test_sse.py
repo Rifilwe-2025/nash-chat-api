@@ -1,11 +1,13 @@
-"""SSE framing — the transport Phase 8's streaming chat endpoint will use."""
+"""SSE framing — the transport the streaming chat endpoint uses."""
 
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
 
-from src.core.sse import format_event, format_json_event, sse_response, text_event_stream
+from starlette.requests import ClientDisconnect
+from starlette.types import Message
+
+from src.core.sse import format_event, format_json_event, sse_response
 
 
 def test_a_frame_ends_with_a_blank_line() -> None:
@@ -27,24 +29,61 @@ def test_json_frames_are_compact() -> None:
     assert frame == 'event: delta\ndata: {"delta":"hi"}\n\n'
 
 
-async def test_the_stream_ends_with_a_done_event() -> None:
-    async def chunks() -> AsyncIterator[str]:
-        yield "Hel"
-        yield "lo"
+async def test_the_response_sends_the_frames_it_is_given_unchanged() -> None:
+    async def frames() -> AsyncIterator[str]:
+        yield format_json_event({"delta": "Hel"}, event="delta")
+        yield format_json_event({"done": True}, event="done")
 
-    frames = [frame async for frame in text_event_stream(chunks())]
+    response = sse_response(frames())
 
-    assert len(frames) == 3
-    assert json.loads(frames[0].split("data: ")[1]) == {"delta": "Hel"}
-    assert json.loads(frames[2].split("data: ")[1]) == {"done": True}
+    sent = [chunk async for chunk in response.body_iterator]
+    assert sent == [
+        'event: delta\ndata: {"delta":"Hel"}\n\n',
+        'event: done\ndata: {"done":true}\n\n',
+    ]
 
 
 def test_the_response_disables_proxy_buffering() -> None:
-    async def chunks() -> AsyncIterator[str]:
-        yield "hi"
+    async def frames() -> AsyncIterator[str]:
+        yield format_event("hi")
 
-    response = sse_response(chunks())
+    response = sse_response(frames())
 
     assert response.media_type == "text/event-stream"
     assert response.headers["x-accel-buffering"] == "no"
     assert response.headers["cache-control"] == "no-cache"
+
+
+async def test_a_reader_leaving_mid_stream_is_not_an_error() -> None:
+    """On an ASGI 2.4 server a closed tab arrives as ``ClientDisconnect`` out of the response.
+
+    Propagating it would fail the request and roll back its transaction, so the response ends
+    quietly instead — the same way it already ends on older servers, which cancel the stream.
+    """
+
+    closed = False
+
+    async def frames() -> AsyncIterator[str]:
+        nonlocal closed
+        try:
+            yield format_event("one")
+            yield format_event("two")
+        finally:
+            closed = True
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.body" and message.get("body"):
+            raise OSError("the client went away")
+
+    scope = {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"}}
+
+    # Starlette turns the OSError into ClientDisconnect. Were it not swallowed, this would raise.
+    try:
+        await sse_response(frames())(scope, receive, send)
+    except ClientDisconnect:  # pragma: no cover - the failure this test exists to catch
+        raise AssertionError("a reader leaving propagated out of the response") from None
+
+    assert closed, "the frame source is closed rather than left suspended"

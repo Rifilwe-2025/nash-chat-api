@@ -28,7 +28,7 @@ from src.modules.agents.domain.services import AgentService
 from src.modules.tenants.domain.models import Tenant
 from src.modules.tools.domain.models import AgentTool, HttpMethod, ToolAuthType
 from src.modules.tools.domain.services import ToolService
-from src.shared.llm import CompletionRequest, CompletionResult, TokenUsage, ToolCall
+from src.shared.llm import CompletionRequest, CompletionResult, TextStream, TokenUsage, ToolCall
 
 HOST = "api.example.test"
 ENDPOINT = f"https://{HOST}/orders/{{orderId}}"
@@ -101,14 +101,18 @@ class ToolCallingLLM:
             tool_calls=list(step.calls),
         )
 
-    def stream(self, provider: str, request: CompletionRequest, api_key: str | None = None):  # type: ignore[no-untyped-def]
+    def stream(
+        self, provider: str, request: CompletionRequest, api_key: str | None = None
+    ) -> TextStream:
         self.requests.append((provider, request))
         text = self.script[-1].text
+        stream = TextStream()
 
         async def iterator() -> AsyncIterator[str]:
             yield text
+            stream.usage = TokenUsage(prompt_tokens=100, completion_tokens=20)
 
-        return iterator()
+        return stream.attach(iterator())
 
     @property
     def last(self) -> CompletionRequest:

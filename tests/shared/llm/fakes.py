@@ -91,6 +91,9 @@ class _FakeAnthropicStream:
 
         return gen()
 
+    async def get_final_message(self) -> FakeAnthropicResponse:
+        return FakeAnthropicResponse(content=[FakeTextBlock(text="".join(self._chunks))])
+
 
 class FakeAnthropicClient:
     def __init__(self, response: Any = None, error: Exception | None = None) -> None:
@@ -155,6 +158,7 @@ class FakeStreamChoice:
 @dataclass
 class FakeStreamChunk:
     choices: list[FakeStreamChoice]
+    usage: FakeOpenAIUsage | None = None
 
 
 class FakeOpenAICompletions:
@@ -174,6 +178,8 @@ class FakeOpenAICompletions:
                     FakeStreamChunk([]),  # keep-alive chunk with no choices
                     FakeStreamChunk([FakeStreamChoice(FakeDelta("lo"))]),
                     FakeStreamChunk([FakeStreamChoice(FakeDelta(None))]),
+                    # Sent last, and only when `stream_options.include_usage` was requested.
+                    FakeStreamChunk([], usage=FakeOpenAIUsage()),
                 ]
             )
         return self._response
@@ -211,6 +217,7 @@ class FakeGeminiResponse:
 @dataclass
 class FakeGeminiChunk:
     text: str | None
+    usage_metadata: FakeGeminiUsage | None = None
 
 
 class FakeGeminiModels:
@@ -229,7 +236,13 @@ class FakeGeminiModels:
         self._recorder.calls.append(payload)
         if self._error:
             raise self._error
-        return _async_iter([FakeGeminiChunk("Hel"), FakeGeminiChunk(None), FakeGeminiChunk("lo")])
+        return _async_iter(
+            [
+                FakeGeminiChunk("Hel"),
+                FakeGeminiChunk(None),
+                FakeGeminiChunk("lo", usage_metadata=FakeGeminiUsage()),
+            ]
+        )
 
 
 class FakeGeminiClient:

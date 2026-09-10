@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import Callable
 from typing import Any
 
 import pytest
@@ -19,7 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.agents.domain.models import Agent
 from src.shared.llm import registry
-from src.shared.llm.base import CompletionRequest, CompletionResult, LLMProvider, TokenUsage
+from src.shared.llm.base import (
+    CompletionRequest,
+    CompletionResult,
+    LLMProvider,
+    TextStream,
+    TokenUsage,
+)
 from src.shared.llm.errors import LLMAuthenticationError, LLMError
 from tests.modules.agents.test_agent_crud import create, headers
 
@@ -51,7 +57,7 @@ class StubProvider(LLMProvider):
             provider=self.name,
         )
 
-    def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
+    def stream(self, request: CompletionRequest) -> TextStream:
         raise NotImplementedError("a probe never streams")
 
 
