@@ -38,6 +38,11 @@ def generate_secret() -> str:
     return f"whsec_{secrets.token_urlsafe(SECRET_BYTES)}"
 
 
+def secret_hint(secret: str) -> str:
+    """Enough of a secret to recognise it, and not enough to sign with: ``whsec_...a91f``."""
+    return f"whsec_...{secret[-4:]}" if len(secret) > 4 else "whsec_..."
+
+
 def signature_for(secret: str, payload: str, timestamp: int) -> str:
     """``t=<unix>,v1=<hex>`` over ``<timestamp>.<body>``."""
     signed = f"{timestamp}.{payload}".encode()

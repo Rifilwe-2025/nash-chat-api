@@ -8,10 +8,10 @@ web client or WhatsApp through a generated API key.
 
 | | |
 |---|---|
-| API surface | 75 paths / 98 operations across 13 tags |
+| API surface | 76 paths / 99 operations across 13 tags |
 | Schema | 18 domain tables, 18 migrations |
 | Error catalogue | 90 stable machine-readable codes |
-| Test suite | 933 tests against a real Postgres |
+| Test suite | 937 tests against a real Postgres |
 
 ---
 
@@ -718,7 +718,8 @@ token. Every response carries the key's remaining rate-limit allowance.
 | 🔑 | `GET` | `/agents/{agent_id}/integration-docs` | Generated integration guide |
 | 🔑 | `GET` | `/agents/{agent_id}/integration-docs/export` | The same guide as a file — `format=md` or `format=pdf` |
 | 🔑 | `GET` | `/webhooks` | List outbound webhook endpoints |
-| 🔑 | `POST` | `/webhooks` | Create a webhook endpoint |
+| 🔑 | `POST` | `/webhooks` | Create a webhook endpoint — **the signing secret is in this response** |
+| 🔑 | `GET` | `/webhooks/{webhook_id}/secret` | Reveal an endpoint's signing secret; listings carry only a hint |
 | 🔑 | `PATCH` | `/webhooks/{webhook_id}` | Update a webhook endpoint |
 | 🔑 | `DELETE` | `/webhooks/{webhook_id}` | Delete a webhook endpoint |
 | 🔑 | `POST` | `/webhooks/{webhook_id}/test` | Send a test delivery |

@@ -141,6 +141,68 @@ async def test_an_endpoint_is_created_with_a_signing_secret(client: AsyncClient)
     assert response.json()["value"]["events"] == ["conversation.escalated"]
 
 
+async def test_a_listing_carries_a_hint_of_the_secret_and_not_the_secret(
+    client: AsyncClient,
+) -> None:
+    """A credential that rides along on every read gets read by things that had no need of it."""
+    auth = await owner(client)
+    created = await client.post(
+        "/webhooks",
+        json={"url": "https://example.com/hooks", "events": ["conversation.started"]},
+        headers=auth,
+    )
+    secret = created.json()["value"]["secret"]
+
+    listed = await client.get("/webhooks", headers=auth)
+    patched = await client.patch(
+        f"/webhooks/{created.json()['value']['id']}",
+        json={"url": "https://example.com/hooks-2"},
+        headers=auth,
+    )
+
+    row = listed.json()["value"][0]
+    assert "secret" not in row
+    assert row["secretHint"] == f"whsec_...{secret[-4:]}"
+    assert "secret" not in patched.json()["value"]
+    assert secret not in listed.text
+
+
+async def test_the_secret_can_still_be_asked_for(client: AsyncClient) -> None:
+    """It has to stay recoverable: the receiver verifies our signature with it."""
+    auth = await owner(client)
+    created = await client.post(
+        "/webhooks",
+        json={"url": "https://example.com/hooks", "events": ["conversation.started"]},
+        headers=auth,
+    )
+    endpoint = created.json()["value"]
+
+    revealed = await client.get(f"/webhooks/{endpoint['id']}/secret", headers=auth)
+
+    assert revealed.status_code == 200
+    assert revealed.json()["value"]["secret"] == endpoint["secret"]
+    assert revealed.json()["value"]["id"] == endpoint["id"]
+
+
+async def test_another_tenant_cannot_ask_for_the_secret(client: AsyncClient) -> None:
+    first = await owner(client)
+    second = await owner(client)
+    created = await client.post(
+        "/webhooks",
+        json={"url": "https://example.com/hooks", "events": ["conversation.started"]},
+        headers=first,
+    )
+
+    response = await client.get(f"/webhooks/{created.json()['value']['id']}/secret", headers=second)
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "WEBHOOK_NOT_FOUND"
+
+
+async def test_revealing_a_secret_requires_authentication(client: AsyncClient) -> None:
+    assert (await client.get(f"/webhooks/{uuid.uuid4()}/secret")).status_code == 401
+
+
 async def test_an_unknown_event_is_rejected(client: AsyncClient) -> None:
     auth = await owner(client)
 
@@ -167,9 +229,10 @@ async def test_an_endpoint_can_be_disabled_without_losing_its_secret(
     response = await client.patch(
         f"/webhooks/{endpoint['id']}", json={"status": "disabled"}, headers=auth
     )
+    revealed = await client.get(f"/webhooks/{endpoint['id']}/secret", headers=auth)
 
     assert response.json()["value"]["status"] == "disabled"
-    assert response.json()["value"]["secret"] == endpoint["secret"]
+    assert revealed.json()["value"]["secret"] == endpoint["secret"]
 
 
 async def test_an_endpoint_can_be_deleted(client: AsyncClient) -> None:
