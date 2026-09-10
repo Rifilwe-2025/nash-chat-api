@@ -138,6 +138,40 @@ class TokenUsage:
         )
 
 
+class TextStream:
+    """Text deltas as a provider writes them, and the usage it reported for writing them.
+
+    Every provider reports usage at the *end* of a stream — Claude on its final message, OpenAI in
+    a trailing chunk it only sends when asked, Gemini on its last chunk — so ``usage`` is only
+    meaningful once iteration has finished. A stream that fails or is abandoned part-way keeps
+    whatever was reported by then, which is usually nothing: zero means unknown, and is never
+    replaced by an estimate.
+    """
+
+    def __init__(self) -> None:
+        self.usage = TokenUsage()
+        self._deltas: AsyncIterator[str] | None = None
+
+    def attach(self, deltas: AsyncIterator[str]) -> TextStream:
+        """Set the iterator the adapter produces, which fills in ``usage`` as it finishes."""
+        self._deltas = deltas
+        return self
+
+    def __aiter__(self) -> TextStream:
+        return self
+
+    async def __anext__(self) -> str:
+        if self._deltas is None:
+            raise StopAsyncIteration
+        return await self._deltas.__anext__()
+
+    async def aclose(self) -> None:
+        """Close the provider's stream, releasing its connection, even if it was not finished."""
+        close = getattr(self._deltas, "aclose", None)
+        if close is not None:
+            await close()
+
+
 @dataclass(frozen=True, slots=True)
 class CompletionRequest:
     """Everything a provider needs for one turn, in provider-neutral terms."""
@@ -173,10 +207,10 @@ class LLMProvider(ABC):
         """Run one turn and return the whole response."""
 
     @abstractmethod
-    def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
-        """Yield text deltas as they arrive.
+    def stream(self, request: CompletionRequest) -> TextStream:
+        """Yield text deltas as they arrive, recording the provider's usage once they stop.
 
-        Returns the iterator rather than being an async generator itself, so implementations can
+        Returns the stream rather than being an async generator itself, so implementations can
         open their own streaming context managers.
         """
 

@@ -21,6 +21,7 @@ from src.shared.llm.base import (
     CompletionResult,
     LLMProvider,
     Role,
+    TextStream,
     TokenUsage,
     ToolCall,
 )
@@ -165,19 +166,28 @@ class GeminiProvider(LLMProvider):
             raw_finish_reason=_finish_reason(response),
         )
 
-    def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
+    def stream(self, request: CompletionRequest) -> TextStream:
+        stream = TextStream()
+
         async def iterator() -> AsyncIterator[str]:
             with _translated(self.name):
-                stream = await self._client.aio.models.generate_content_stream(
+                chunks = await self._client.aio.models.generate_content_stream(
                     model=request.model or DEFAULT_MODEL,
                     contents=self._contents(request),
                     config=self._config(request),
                 )
-                async for chunk in stream:
+                async for chunk in chunks:
+                    # Running totals, not per-chunk counts: the last chunk's figures are the call's.
+                    usage = getattr(chunk, "usage_metadata", None)
+                    if usage is not None:
+                        stream.usage = TokenUsage(
+                            prompt_tokens=getattr(usage, "prompt_token_count", 0) or 0,
+                            completion_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+                        )
                     if chunk.text:
                         yield chunk.text
 
-        return iterator()
+        return stream.attach(iterator())
 
 
 def _finish_reason(response: Any) -> str | None:

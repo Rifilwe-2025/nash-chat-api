@@ -1,7 +1,7 @@
 """OpenAI adapter, over the official ``openai`` SDK.
 
 Differences absorbed here: the system prompt is the first message rather than a separate field,
-tools use the ``function`` envelope, and usage may be absent on streamed responses.
+tools use the ``function`` envelope, and a stream only reports usage when explicitly asked to.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from src.shared.llm.base import (
     CompletionResult,
     LLMProvider,
     Role,
+    TextStream,
     TokenUsage,
     ToolCall,
 )
@@ -186,20 +187,32 @@ class OpenAIProvider(LLMProvider):
             raw_finish_reason=choice.finish_reason,
         )
 
-    def stream(self, request: CompletionRequest) -> AsyncIterator[str]:
+    def stream(self, request: CompletionRequest) -> TextStream:
+        stream = TextStream()
+
         async def iterator() -> AsyncIterator[str]:
             with _translated(self.name):
-                stream = await self._client.chat.completions.create(
-                    **self._payload(request), stream=True
+                chunks = await self._client.chat.completions.create(
+                    **self._payload(request),
+                    stream=True,
+                    # Without this OpenAI reports no usage at all on a stream. With it, one extra
+                    # chunk arrives last, carrying the usage and no choices.
+                    stream_options={"include_usage": True},
                 )
-                async for chunk in stream:
+                async for chunk in chunks:
+                    usage = getattr(chunk, "usage", None)
+                    if usage is not None:
+                        stream.usage = TokenUsage(
+                            prompt_tokens=usage.prompt_tokens or 0,
+                            completion_tokens=usage.completion_tokens or 0,
+                        )
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
                     if delta and delta.content:
                         yield delta.content
 
-        return iterator()
+        return stream.attach(iterator())
 
     async def aclose(self) -> None:
         close = getattr(self._client, "close", None)
