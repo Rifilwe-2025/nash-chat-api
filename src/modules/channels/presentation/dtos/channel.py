@@ -54,22 +54,46 @@ class UpdateWebhookRequest(CamelModel):
 
 
 class WebhookResponse(CamelModel):
+    """An endpoint as it can be listed. The signing secret is deliberately **not** here.
+
+    It is recoverable — unlike an API key, we must be able to sign with it — but recoverable is not
+    the same as returned on every read. It comes back once when the endpoint is created, and after
+    that only from `GET /webhooks/{webhookId}/secret`, which is asked for on purpose.
+    """
+
     id: uuid.UUID
     agent_id: uuid.UUID | None = None
     url: str
     events: list[str]
     status: WebhookStatus
-    secret: str = Field(
-        description=(
-            "Signing secret. Verify every delivery's signature against it — a webhook URL is not a "
-            "secret, and anyone who guesses yours can post to it."
-        ),
-        examples=["whsec_9dK0gH5jL…"],
+    secret_hint: str = Field(
+        description="The last characters of the signing secret, to tell endpoints apart.",
+        examples=["whsec_...a91f"],
     )
     failure_count: int = Field(description="Consecutive failed deliveries. Resets on success.")
     last_delivery_at: datetime | None = None
     last_error: str | None = None
     created_at: datetime
+
+
+class CreatedWebhookResponse(WebhookResponse):
+    """The creation response, and the one other place a secret appears."""
+
+    secret: str = Field(
+        description=(
+            "The signing secret. Verify every delivery against it — a webhook URL is not a secret, "
+            "and anyone who guesses yours can post to it. Readable again from "
+            "`GET /webhooks/{webhookId}/secret`."
+        ),
+        examples=["whsec_9dK0gH5jL"],
+    )
+
+
+class WebhookSecretResponse(CamelModel):
+    """A signing secret, asked for deliberately."""
+
+    id: uuid.UUID
+    secret: str
 
 
 class WebhookTestResponse(CamelModel):

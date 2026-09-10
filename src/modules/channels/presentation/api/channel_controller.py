@@ -13,15 +13,17 @@ from src.modules.agents.domain.models import Agent
 from src.modules.api_keys.domain.services import ApiKeyService
 from src.modules.channels.domain.models import ChannelConfig, ChannelType, WebhookEndpoint
 from src.modules.channels.domain.services import ChannelService
-from src.modules.channels.internal import integration_docs
+from src.modules.channels.internal import integration_docs, webhooks
 from src.modules.channels.presentation.dtos.channel import (
     ChannelConfigResponse,
     ConfigureChannelRequest,
+    CreatedWebhookResponse,
     CreateWebhookRequest,
     DocsFormat,
     IntegrationDocsResponse,
     UpdateWebhookRequest,
     WebhookResponse,
+    WebhookSecretResponse,
     WebhookTestResponse,
 )
 from src.modules.tenants.presentation.dependencies import CurrentTenantDep
@@ -58,12 +60,17 @@ def _webhook(endpoint: WebhookEndpoint) -> WebhookResponse:
         url=endpoint.url,
         events=[str(event) for event in endpoint.events],
         status=endpoint.status,
-        secret=endpoint.secret,
+        secret_hint=webhooks.secret_hint(endpoint.secret),
         failure_count=endpoint.failure_count,
         last_delivery_at=endpoint.last_delivery_at,
         last_error=endpoint.last_error,
         created_at=endpoint.created_at,
     )
+
+
+def _created_webhook(endpoint: WebhookEndpoint) -> CreatedWebhookResponse:
+    """The one response that carries the secret, beside everything a listing shows."""
+    return CreatedWebhookResponse(**_webhook(endpoint).model_dump(), secret=endpoint.secret)
 
 
 def _config(config: ChannelConfig) -> ChannelConfigResponse:
@@ -322,13 +329,15 @@ async def list_channels(
 
 @router.post(
     "/webhooks",
-    response_model=ApiResponse[WebhookResponse],
+    response_model=ApiResponse[CreatedWebhookResponse],
     status_code=201,
     summary="Create a webhook endpoint",
     description=(
-        "Subscribes a URL to platform events. The response contains the **signing secret** — every "
+        "Subscribes a URL to platform events. **This response carries the signing secret** — every "
         "delivery is signed with it, and your receiver must verify that signature: a webhook URL "
         "is not a secret, and anyone who guesses yours can post to it.\n\n"
+        "A listing shows only a hint of the secret afterwards. It stays recoverable, deliberately, "
+        "from `GET /webhooks/{webhookId}/secret`.\n\n"
         "Deliveries are best effort and are not retried yet, so treat an event as a prompt to act "
         "rather than the only record."
     ),
@@ -346,13 +355,37 @@ async def list_channels(
 )
 async def create_webhook(
     payload: CreateWebhookRequest, service: ServiceDep
-) -> ApiResponse[WebhookResponse]:
+) -> ApiResponse[CreatedWebhookResponse]:
     endpoint = await service.create_endpoint(
         url=payload.url,
         events=[event.value for event in payload.events],
         agent_id=payload.agent_id,
     )
-    return ApiResponse.ok(_webhook(endpoint), message="Webhook endpoint created.")
+    return ApiResponse.ok(_created_webhook(endpoint), message="Webhook endpoint created.")
+
+
+@router.get(
+    "/webhooks/{webhook_id}/secret",
+    response_model=ApiResponse[WebhookSecretResponse],
+    summary="Reveal a webhook endpoint's signing secret",
+    description=(
+        "Returns the signing secret for one endpoint. Unlike an API key it is recoverable — the "
+        "platform has to sign deliveries with it — but it is still a credential, so it is asked "
+        "for one endpoint at a time rather than riding along on every listing.\n\n"
+        "Whoever holds it can forge a delivery your receiver will believe. Do not log it, and do "
+        "not paste it anywhere shared."
+    ),
+    responses={
+        200: {"description": "The signing secret."},
+        401: UNAUTHORIZED,
+        404: WEBHOOK_NOT_FOUND,
+    },
+)
+async def reveal_webhook_secret(
+    webhook_id: WebhookIdPath, service: ServiceDep
+) -> ApiResponse[WebhookSecretResponse]:
+    endpoint = await service.get_endpoint(webhook_id)
+    return ApiResponse.ok(WebhookSecretResponse(id=endpoint.id, secret=endpoint.secret))
 
 
 @router.get(
@@ -383,7 +416,7 @@ async def list_webhooks(
     summary="Update a webhook endpoint",
     description=(
         "Changes the URL, the events, or the status. Set `status` to `disabled` to stop deliveries "
-        "while keeping the endpoint and its secret."
+        "while keeping the endpoint and its secret, which nothing here changes."
     ),
     responses={
         200: {"description": "The updated endpoint."},
