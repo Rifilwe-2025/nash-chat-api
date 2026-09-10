@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import enum
 import uuid
 from datetime import datetime
 from typing import Any
@@ -15,6 +16,13 @@ from src.modules.channels.domain.models import (
     WebhookStatus,
 )
 from src.shared.responses import CamelModel
+
+
+class DocsFormat(str, enum.Enum):
+    """Which file the integration guide is downloaded as."""
+
+    MARKDOWN = "md"
+    PDF = "pdf"
 
 
 class CreateWebhookRequest(CamelModel):

@@ -65,6 +65,7 @@ mypy_extensions==1.1.0
 openai==3.5.0
 packageurl-python==0.17.6
 packaging==26.3
+pillow==12.3.0
 pip-api==0.0.34
 pip-requirements-parser==32.0.1
 pip_audit==2.10.1
@@ -90,6 +91,7 @@ python-dotenv==1.2.3
 python-multipart==0.0.32
 PyYAML==6.0.2
 redis==5.2.1
+reportlab==5.0.1
 requests==2.34.2
 rich==15.0.0
 ruff==0.8.6

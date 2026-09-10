@@ -8,10 +8,10 @@ web client or WhatsApp through a generated API key.
 
 | | |
 |---|---|
-| API surface | 71 paths / 94 operations across 13 tags |
-| Schema | 18 domain tables, 16 migrations |
-| Error catalogue | 87 stable machine-readable codes |
-| Test suite | 807 tests against a real Postgres |
+| API surface | 75 paths / 98 operations across 13 tags |
+| Schema | 18 domain tables, 18 migrations |
+| Error catalogue | 90 stable machine-readable codes |
+| Test suite | 933 tests against a real Postgres |
 
 ---
 
@@ -135,7 +135,7 @@ src/
 │   ├── queue.py           #   celery app; inline | redis modes
 │   ├── sse.py             #   server-sent events for streaming chat
 │   ├── openapi.py         #   TAGS_METADATA, API description
-│   └── error_catalogue.py #   87 stable error codes → human text
+│   └── error_catalogue.py #   90 stable error codes → human text
 ├── shared/                # infrastructure, no feature logic
 │   ├── database/          #   BaseModel (UUID id, timestamps), TenantScopedModel, session
 │   ├── responses/         #   ApiResponse / PaginatedResponse, create_router()
@@ -716,6 +716,7 @@ token. Every response carries the key's remaining rate-limit allowance.
 | 🔑 | `GET` | `/agents/{agent_id}/channels` | List an agent's channel configurations |
 | 🔑 | `PUT` | `/agents/{agent_id}/channels/{channel_type}` | Configure a channel |
 | 🔑 | `GET` | `/agents/{agent_id}/integration-docs` | Generated integration guide |
+| 🔑 | `GET` | `/agents/{agent_id}/integration-docs/export` | The same guide as a file — `format=md` or `format=pdf` |
 | 🔑 | `GET` | `/webhooks` | List outbound webhook endpoints |
 | 🔑 | `POST` | `/webhooks` | Create a webhook endpoint |
 | 🔑 | `PATCH` | `/webhooks/{webhook_id}` | Update a webhook endpoint |
@@ -795,7 +796,7 @@ Errors carry a stable `error.code` alongside human-readable `error.detail`:
 }
 ```
 
-There are **87 codes** in `src/core/error_catalogue.py`. Match on `code`, never on `detail` — the
+There are **90 codes** in `src/core/error_catalogue.py`. Match on `code`, never on `detail` — the
 prose may change, the code will not. A sample:
 
 | Code | Meaning |
@@ -877,6 +878,7 @@ Sections: `app`, `server`, `database`, `redis`, `llm`, `conversations`, `knowled
 | `RATE_LIMIT_BACKEND` | `memory` | Use `redis` with more than one worker. |
 | `KB_ALLOW_PRIVATE_URLS` | `false` | Leave false anywhere reachable from outside: it is what stops a submitted URL reaching internal services (SSRF). |
 | `TOOLS_ALLOW_PRIVATE_URLS` | `false` | Same, and worse — a tool endpoint is called with model-written arguments. |
+| `PUBLIC_BASE_URL` | *empty* | The origin this API is reachable at from outside. Every URL written down for somebody else — the integration guide, the WhatsApp callback — is built from it. Empty uses the request's own origin, which is correct locally and the *internal* origin behind a proxy: a guide telling a tenant to POST to `http://api:8000` is worse than no guide, and a PDF carrying it outlives the request. |
 | `WHATSAPP_PUBLIC_BASE_URL` | *empty* | Must be the origin Meta can reach. Empty uses the request's own origin, which is correct locally and wrong behind a proxy. |
 | `LLM_PRICE_TABLE` | *empty* | Per-model USD per million tokens, e.g. `gpt-4o=2.5/10,claude-sonnet-4-5=3/15`. Empty records tokens but not cost — **the platform never guesses at pricing**. |
 | `LLM_FALLBACK_PROVIDER` | *empty* | Provider to use when the configured one is rate limited or down. Empty disables fallback. |

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -260,7 +261,17 @@ async def test_the_guide_is_generated_for_a_real_agent(client: AsyncClient) -> N
     markdown = response.json()["value"]["markdown"]
     assert agent["name"] in markdown
     assert agent["id"] in markdown
-    for section in ("## Quickstart", "## Sessions", "## Escalation", "## Rate limits", "## Errors"):
+    for section in (
+        "## Quickstart",
+        "## Where the key lives",
+        "## Sessions",
+        "## Streaming",
+        "## Resuming a conversation",
+        "## Escalation",
+        "## Allowed origins",
+        "## Rate limits",
+        "## Errors",
+    ):
         assert section in markdown
     assert "POST /v1/chat/messages" in markdown
 
@@ -314,3 +325,74 @@ async def test_docs_for_another_tenants_agent_are_reported_as_missing(
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "AGENT_NOT_FOUND"
+
+
+async def test_the_guide_says_the_key_does_not_belong_in_a_browser(client: AsyncClient) -> None:
+    """The guide recommends a localStorage visitor id, which invites exactly the wrong reading.
+
+    Anyone following it from a front-end will reach for the key next, so the document has to say
+    where the key belongs before it says anything about browsers.
+    """
+    auth = await owner(client)
+    agent = await published_agent(client, auth)
+
+    markdown = (await client.get(f"/agents/{agent['id']}/integration-docs", headers=auth)).json()[
+        "value"
+    ]["markdown"]
+
+    assert "never in a browser" in markdown
+    assert "revoke" in markdown
+
+
+async def test_the_guide_documents_every_frame_a_stream_can_send(client: AsyncClient) -> None:
+    auth = await owner(client)
+    agent = await published_agent(client, auth)
+
+    markdown = (await client.get(f"/agents/{agent['id']}/integration-docs", headers=auth)).json()[
+        "value"
+    ]["markdown"]
+
+    assert "event: delta" in markdown
+    assert "event: done" in markdown
+    assert "PROVIDER_UNAVAILABLE" in markdown
+    assert "X-Conversation-Id" in markdown
+    assert "ORIGIN_NOT_ALLOWED" in markdown
+
+
+async def test_the_guide_lists_the_origins_the_agent_actually_allows(
+    client: AsyncClient,
+) -> None:
+    """Generic advice about origins is no use; which ones *this* agent accepts is the answer."""
+    auth = await owner(client)
+    agent = await published_agent(client, auth)
+
+    before = (await client.get(f"/agents/{agent['id']}/integration-docs", headers=auth)).json()[
+        "value"
+    ]["markdown"]
+    await client.put(
+        f"/agents/{agent['id']}/channels/web",
+        json={"settings": {"allowedOrigins": ["https://shop.example.com"]}},
+        headers=auth,
+    )
+    after = (await client.get(f"/agents/{agent['id']}/integration-docs", headers=auth)).json()[
+        "value"
+    ]["markdown"]
+
+    assert "lists no origins yet" in before
+    assert "`https://shop.example.com`" in after
+
+
+async def test_the_guide_uses_the_public_base_url_rather_than_the_request_origin(
+    client: AsyncClient, config_override: Callable[..., None]
+) -> None:
+    """Behind a proxy the request's origin is internal, and this URL outlives the request."""
+    config_override(PUBLIC_BASE_URL="https://api.nashpaints.co.zw")
+    auth = await owner(client)
+    agent = await published_agent(client, auth)
+
+    response = await client.get(f"/agents/{agent['id']}/integration-docs", headers=auth)
+
+    value = response.json()["value"]
+    assert value["baseUrl"] == "https://api.nashpaints.co.zw"
+    assert "https://api.nashpaints.co.zw/v1/chat/messages" in value["markdown"]
+    assert "http://test" not in value["markdown"]
