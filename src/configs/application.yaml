@@ -8,6 +8,11 @@ app:
   env: "${APP_ENV:local} | str"
   version: "${APP_VERSION:0.1.0} | str"
   debug: "${DEBUG:false} | bool"
+  # The origin this API is reachable at from outside. Used wherever a URL is written down for
+  # somebody else to use later — the generated integration guide, the WhatsApp callback. Behind
+  # a proxy the request's own origin is the internal one, and a guide telling a tenant to POST to
+  # http://api:8000 is worse than no guide. Empty falls back to the request's own origin.
+  public_base_url: "${PUBLIC_BASE_URL:} | str"
 
 server:
   host: "${HOST:127.0.0.1} | str"

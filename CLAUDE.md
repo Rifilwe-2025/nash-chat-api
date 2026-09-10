@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project state
 
-This directory is the **backend (`api/`) of a two-part project** (`../webapp/` holds the Next.js
-frontend, currently empty). As of now the backend contains **no code yet** — only `.gitignore` and
-`.docs/`. It is not yet a git repository.
+This directory is the **backend of a two-part project**; the operations console lives in the sibling
+`nashe-chat-webapp` repository. The API is built and serving: 18 domain tables, 18 migrations, and
+every phase in `.docs/IMPLEMENTATION_PLAN.md` complete. **`README.md` is the current description of
+what exists** — read it before changing anything.
 
 `.docs/ai-agent-platform-spec.md` is the authoritative product/architecture spec. Read it before
 designing anything; the sections below summarize only the decisions that are easy to get wrong.
@@ -18,12 +19,19 @@ Note: the docs in `.docs/git/` were carried over from a different repo (`kudzaip
 Rust/Tauri project). The **conventions** in them apply here; the concrete commands, CI job names, and
 "current state" notes in them do **not** — ignore any `cargo`/Tauri references.
 
-## Stack (from the spec and `.gitignore`)
+## Stack and commands
 
-Python + FastAPI + Uvicorn, SQLAlchemy 2.0 (async) + Alembic, Postgres, Redis + a task queue (Celery
-or RQ) for background work — matching the reference repo below. Dependencies live in
-`requirements.txt`; `pyproject.toml` is tool config only (ruff, mypy, pytest). No build/test/lint
-commands exist yet; add them here when Phase 0 scaffolds them.
+Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2.0 (async) with Alembic, PostgreSQL, Redis, Celery.
+Dependencies are pinned in `requirements.txt` (a full freeze); `pyproject.toml` is tool config only
+(ruff, mypy, pytest).
+
+```bash
+ruff check . && ruff format --check . && mypy && pytest   # the merge bar: all four green
+python -m src.configs.generate                            # after editing application.yaml
+alembic upgrade head                                      # apply migrations
+```
+
+`pytest` needs a running Postgres and creates its own database from `DATABASE_TEST_URL`.
 
 ## Architecture
 

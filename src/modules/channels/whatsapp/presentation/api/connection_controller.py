@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import Path, Query, Request
 
 from src import configs
+from src.core.public_url import public_base_url
 from src.modules.channels.domain.models import ChannelConfig
 from src.modules.channels.whatsapp.domain.models import (
     DeliveryStatus,
@@ -67,8 +68,8 @@ def webhook_url(request: Request, connection_id: uuid.UUID) -> str:
     origin is the internal one — and a tenant pasting ``http://api:8000/…`` into Meta gets a
     subscription that can never be verified.
     """
-    base = str(configs.WHATSAPP_PUBLIC_BASE_URL or "").rstrip("/") or str(request.base_url).rstrip(
-        "/"
+    base = str(configs.WHATSAPP_PUBLIC_BASE_URL or "").strip().rstrip("/") or public_base_url(
+        request
     )
     return f"{base}/v1/channels/whatsapp/webhook/{connection_id}"
 

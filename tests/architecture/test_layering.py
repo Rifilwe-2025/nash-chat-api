@@ -246,6 +246,9 @@ async def test_every_successful_response_is_the_envelope(client: AsyncClient) ->
     exempt = {
         ("/v1/chat/messages/stream", "post"),
         ("/v1/channels/whatsapp/webhook/{connection_id}", "get"),
+        # A downloaded file is the third: the response body *is* the document, and wrapping a PDF
+        # in a JSON envelope would mean base64 and a client that has to unwrap it before saving.
+        ("/agents/{agent_id}/integration-docs/export", "get"),
     }
 
     offenders = []

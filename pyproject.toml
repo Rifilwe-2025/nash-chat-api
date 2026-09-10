@@ -17,6 +17,11 @@ ignore = ["N818"]
 [tool.ruff.lint.isort]
 known-first-party = ["src"]
 
+[tool.ruff.lint.per-file-ignores]
+# RUF001 flags characters that look like ASCII ones. The substitution table in this module is
+# *about* those characters — naming each one is the point of it.
+"src/shared/documents/markdown_pdf.py" = ["RUF001"]
+
 [tool.mypy]
 python_version = "3.12"
 files = ["src", "tests"]
@@ -30,7 +35,7 @@ warn_unused_ignores = true
 show_error_codes = true
 
 [[tool.mypy.overrides]]
-module = ["slowapi.*", "celery.*"]
+module = ["slowapi.*", "celery.*", "reportlab.*"]
 ignore_missing_imports = true
 
 # Celery's task decorator is untyped, so every task shell would be reported as untyped even though

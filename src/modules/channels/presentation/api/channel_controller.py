@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import uuid
+from functools import partial
 from typing import Annotated
 
-from fastapi import Depends, Path, Query, Request
+import anyio
+from fastapi import Depends, Path, Query, Request, Response
 
 from src import configs
+from src.core.public_url import public_base_url
+from src.modules.agents.domain.models import Agent
 from src.modules.api_keys.domain.services import ApiKeyService
 from src.modules.channels.domain.models import ChannelConfig, ChannelType, WebhookEndpoint
 from src.modules.channels.domain.services import ChannelService
@@ -14,6 +18,7 @@ from src.modules.channels.presentation.dtos.channel import (
     ChannelConfigResponse,
     ConfigureChannelRequest,
     CreateWebhookRequest,
+    DocsFormat,
     IntegrationDocsResponse,
     UpdateWebhookRequest,
     WebhookResponse,
@@ -22,6 +27,7 @@ from src.modules.channels.presentation.dtos.channel import (
 from src.modules.tenants.presentation.dependencies import CurrentTenantDep
 from src.shared.database.dependencies import SessionDep
 from src.shared.database.pagination import PageParamsDep
+from src.shared.documents import markdown_pdf
 from src.shared.exceptions import ConflictException, NotFoundException
 from src.shared.responses import ApiResponse, PaginatedResponse, create_router
 
@@ -74,44 +80,37 @@ def _config(config: ChannelConfig) -> ChannelConfigResponse:
 
 # -- integration documentation -----------------------------------------------------
 
+MEDIA_TYPES = {
+    DocsFormat.MARKDOWN: "text/markdown; charset=utf-8",
+    DocsFormat.PDF: "application/pdf",
+}
 
-@router.get(
-    "/agents/{agent_id}/integration-docs",
-    response_model=ApiResponse[IntegrationDocsResponse],
-    summary="Get an agent's integration guide",
-    description=(
-        "Returns a complete integration guide for this agent, in Markdown — quickstart, session "
-        "model, escalation handling, webhook verification, rate limits, error codes, and every "
-        "public endpoint.\n\n"
-        "**Generated from the schema this API is currently serving**, not written by hand, so it "
-        "cannot describe a route that no longer exists or miss one that was added. Hand it to "
-        "whoever is doing the integration.\n\n"
-        "Pass `apiKeyId` to have the guide use that key's real prefix, scopes and rate limit "
-        "instead of placeholders."
-    ),
-    responses={
-        200: {"description": "The generated guide."},
-        401: UNAUTHORIZED,
-        404: {"description": "No such agent or key (`AGENT_NOT_FOUND`, `API_KEY_NOT_FOUND`)."},
-    },
-)
-async def get_integration_docs(
-    agent_id: AgentIdPath,
+ApiKeyIdQuery = Annotated[
+    uuid.UUID | None,
+    Query(alias="apiKeyId", description="Use this key's prefix, scopes and limit."),
+]
+DOCS_NOT_FOUND = {"description": "No such agent or key (`AGENT_NOT_FOUND`, `API_KEY_NOT_FOUND`)."}
+
+
+async def _guide(
+    agent_id: uuid.UUID,
     request: Request,
-    service: ServiceDep,
+    service: ChannelService,
     session: SessionDep,
-    tenant_id: CurrentTenantDep,
-    api_key_id: Annotated[
-        uuid.UUID | None,
-        Query(alias="apiKeyId", description="Use this key's prefix, scopes and limit."),
-    ] = None,
-) -> ApiResponse[IntegrationDocsResponse]:
+    tenant_id: uuid.UUID,
+    api_key_id: uuid.UUID | None,
+) -> tuple[Agent, str, str]:
+    """The agent, the base URL the guide was written for, and the guide itself.
+
+    Shared by both routes, so what a tenant downloads cannot drift from what they read on screen:
+    it is the same Markdown, rendered differently.
+    """
     agent = await service.agents.get(agent_id)
 
     prefix, scopes, rate_limit = (
         "nsk_live_xxx",
         ["chat:write", "chat:read"],
-        (configs.RATE_LIMIT_DEFAULT_PER_MINUTE),
+        configs.RATE_LIMIT_DEFAULT_PER_MINUTE,
     )
     if api_key_id is not None:
         api_key = await ApiKeyService(session, tenant_id).get(api_key_id)
@@ -123,7 +122,10 @@ async def get_integration_docs(
             api_key.rate_limit_per_minute,
         )
 
-    base_url = str(request.base_url).rstrip("/")
+    # `PUBLIC_BASE_URL` where it is set, because behind a proxy the request's own origin is the
+    # internal one — and this URL gets copied into somebody's code, or into a PDF that outlives
+    # the request entirely.
+    base_url = public_base_url(request)
 
     # The WhatsApp section appears only when a number is actually connected. Read through the
     # channel service rather than the WhatsApp module's own, because this controller belongs to
@@ -139,16 +141,107 @@ async def get_integration_docs(
         rate_limit=rate_limit,
         signature_header=configs.WEBHOOKS_SIGNATURE_HEADER,
         schema=request.app.openapi(),
+        allowed_origins=await service.allowed_origins(agent.id),
         whatsapp_connection_id=str(whatsapp.id) if whatsapp else None,
         whatsapp_phone_number_id=(
             str(whatsapp.credentials_json.get("phoneNumberId") or "") if whatsapp else None
         ),
     )
+    return agent, base_url, markdown
 
+
+@router.get(
+    "/agents/{agent_id}/integration-docs",
+    response_model=ApiResponse[IntegrationDocsResponse],
+    summary="Get an agent's integration guide",
+    description=(
+        "Returns a complete integration guide for this agent, in Markdown — quickstart, where the "
+        "key belongs, the session model, the streaming frames, resuming a conversation, escalation "
+        "handling, allowed origins, webhook verification, rate limits, error codes, and every "
+        "public endpoint.\n\n"
+        "**Generated from the schema this API is currently serving**, not written by hand, so it "
+        "cannot describe a route that no longer exists or miss one that was added. Hand it to "
+        "whoever is doing the integration, or send them the file from "
+        "`GET /agents/{agentId}/integration-docs/export`.\n\n"
+        "Pass `apiKeyId` to have the guide use that key's real prefix, scopes and rate limit "
+        "instead of placeholders."
+    ),
+    responses={
+        200: {"description": "The generated guide."},
+        401: UNAUTHORIZED,
+        404: DOCS_NOT_FOUND,
+    },
+)
+async def get_integration_docs(
+    agent_id: AgentIdPath,
+    request: Request,
+    service: ServiceDep,
+    session: SessionDep,
+    tenant_id: CurrentTenantDep,
+    api_key_id: ApiKeyIdQuery = None,
+) -> ApiResponse[IntegrationDocsResponse]:
+    agent, base_url, markdown = await _guide(
+        agent_id, request, service, session, tenant_id, api_key_id
+    )
     return ApiResponse.ok(
         IntegrationDocsResponse(
             agent_id=agent.id, agent_name=agent.name, base_url=base_url, markdown=markdown
         )
+    )
+
+
+@router.get(
+    "/agents/{agent_id}/integration-docs/export",
+    summary="Download an agent's integration guide",
+    description=(
+        "The same guide as `GET /agents/{agentId}/integration-docs`, as a file to keep or send "
+        "on: `format=md` for the Markdown, `format=pdf` for a PDF whose text is still text — "
+        "selectable, searchable, and copy-pasteable out of the code blocks.\n\n"
+        "Both are safe to share: only the key's **prefix** ever appears in them, never the "
+        "secret.\n\n"
+        "The body is the document itself rather than the usual JSON envelope, named by a "
+        "`Content-Disposition` filename such as `integrating-sales-assistant.pdf`."
+    ),
+    response_class=Response,
+    responses={
+        200: {
+            "description": "The guide as a file.",
+            "content": {
+                "text/markdown": {"schema": {"type": "string"}},
+                "application/pdf": {"schema": {"type": "string", "format": "binary"}},
+            },
+        },
+        401: UNAUTHORIZED,
+        404: DOCS_NOT_FOUND,
+    },
+)
+async def export_integration_docs(
+    agent_id: AgentIdPath,
+    request: Request,
+    service: ServiceDep,
+    session: SessionDep,
+    tenant_id: CurrentTenantDep,
+    docs_format: Annotated[
+        DocsFormat, Query(alias="format", description="`md` for Markdown, `pdf` for a PDF.")
+    ] = DocsFormat.MARKDOWN,
+    api_key_id: ApiKeyIdQuery = None,
+) -> Response:
+    agent, _, markdown = await _guide(agent_id, request, service, session, tenant_id, api_key_id)
+
+    if docs_format is DocsFormat.PDF:
+        # Laying out a PDF is CPU work, and this process is also streaming replies to other
+        # people's customers. It goes to a worker thread rather than holding the event loop.
+        body = await anyio.to_thread.run_sync(
+            partial(markdown_pdf.render, markdown, title=f"Integrating {agent.name}")
+        )
+    else:
+        body = markdown.encode("utf-8")
+
+    filename = integration_docs.filename(agent.name, docs_format.value)
+    return Response(
+        content=body,
+        media_type=MEDIA_TYPES[docs_format],
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

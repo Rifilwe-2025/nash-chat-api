@@ -31,6 +31,7 @@ EXPOSED_HEADERS = [
     "X-RateLimit-Remaining",
     "X-RateLimit-Reset",
     "Retry-After",
+    "Content-Disposition",
 ]
 
 PUBLIC_CHAT_REQUEST_HEADERS = [

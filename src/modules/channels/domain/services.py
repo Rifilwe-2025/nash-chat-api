@@ -296,8 +296,7 @@ class ChannelService:
         if origin is None:
             return
 
-        config = await self.configs.for_agent(agent_id, ChannelType.WEB)
-        allowed = origins.configured(config.settings_json if config else None)
+        allowed = await self.allowed_origins(agent_id)
         if not allowed or origins.is_allowed(origin, [*allowed, *configs.CORS_ALLOW_ORIGINS]):
             return
 
@@ -306,6 +305,11 @@ class ChannelService:
             "allowed origins.",
             code="ORIGIN_NOT_ALLOWED",
         )
+
+    async def allowed_origins(self, agent_id: uuid.UUID) -> list[str]:
+        """The origins this agent's web channel accepts browser requests from; empty means all."""
+        config = await self.configs.for_agent(agent_id, ChannelType.WEB)
+        return origins.configured(config.settings_json if config else None)
 
     def _web_settings(self, settings: dict[str, object]) -> dict[str, object]:
         """Validate the web channel's allowlist, and store it normalised for exact matching."""

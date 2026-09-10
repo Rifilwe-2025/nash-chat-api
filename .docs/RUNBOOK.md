@@ -176,6 +176,36 @@ listing and the API-key listing. If a new report is slow, check it against
 
 ---
 
+## Streaming holds a connection, and a pool has a bottom
+
+A streamed reply is written while the response body is being sent, so the turn keeps its database
+connection and its per-conversation advisory lock for as long as the model keeps writing — seconds,
+not milliseconds. That is what makes the ordering guarantee true, and it is the first ceiling the
+public chat surface will meet.
+
+The arithmetic, per API container: `DATABASE_POOL_SIZE + DATABASE_MAX_OVERFLOW` (10 + 5 by default)
+is how many turns can be in flight at once. A request that arrives with the pool empty **waits for a
+connection** rather than failing, so the symptom is latency spreading to unrelated endpoints rather
+than an error anybody gets paged about.
+
+**How it looks**
+
+- `GET /analytics/operations` shows durations climbing across routes that have nothing in common.
+- In Postgres, `pg_stat_activity` shows connections sitting `idle in transaction` for seconds,
+  running no query at all.
+
+**What to do**
+
+- Scale API containers out rather than up: each one brings its own pool.
+- Raise `DATABASE_POOL_SIZE` only against Postgres `max_connections`, counting every API container
+  plus the workers.
+- Check `LLM_REQUEST_TIMEOUT_SECONDS`. It bounds how long a single stream can hold its connection,
+  so a generous timeout on a slow provider is what turns a busy minute into a queue.
+
+This is not a bug waiting to be fixed in code. Releasing the connection mid-stream would mean the
+reply could no longer be stored in the same transaction as the message that prompted it, and two
+messages from one visitor could interleave.
+
 ## Load check before a launch
 
 ```bash
