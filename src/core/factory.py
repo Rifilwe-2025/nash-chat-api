@@ -9,9 +9,9 @@ from __future__ import annotations
 import logging
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 
 from src import configs
+from src.core.cors import PathScopedCORSMiddleware
 from src.core.lifespan import lifespan
 from src.core.middleware import RequestContextMiddleware
 from src.core.openapi import API_DESCRIPTION, TAGS_METADATA
@@ -67,13 +67,9 @@ def create_app() -> FastAPI:
     # produce and the ones the CORS middleware answers by itself.
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestContextMiddleware)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=configs.CORS_ALLOW_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # The console's origins from configuration; the public chat API open to any origin, narrowed
+    # per agent by the web channel's allowlist (see src/core/cors.py).
+    app.add_middleware(PathScopedCORSMiddleware, console_origins=configs.CORS_ALLOW_ORIGINS)
 
     register_error_handlers(app)
 

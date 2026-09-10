@@ -474,9 +474,14 @@ Notes that matter:
   answer as one chunk. The caller cannot tell the difference.
 - **Usage is summed across every provider call the turn made.** A tool-using turn calls the model at
   least twice, and the tenant pays for both.
-- **A partial stream is still stored.** Bytes already sent cannot be un-sent, so a mid-stream failure
-  is reported in band and the partial text is kept — a half answer in the transcript is more use to
-  whoever investigates than a gap.
+- **A streamed reply is billed like a buffered one.** Every provider reports usage at the end of a
+  stream — Claude on its final message, OpenAI in a trailing chunk it only sends when asked, Gemini
+  on its last chunk — and that is what the stored message records.
+- **A stream that ends badly still ends clearly.** A mid-stream provider failure arrives as its own
+  `error` frame rather than as text pretending to be part of the reply, and a visitor who closes the
+  tab has whatever they were shown stored anyway. Bytes already sent cannot be un-sent, so the
+  partial text is kept either way — a half answer in the transcript is more use to whoever
+  investigates than a gap.
 
 ### Tools — live API calls
 
@@ -822,6 +827,23 @@ a `429` adds `Retry-After`.
 Use the `redis` backend anywhere with more than one worker: a limit counted per process is not the
 limit that was sold.
 
+### Cross-origin requests
+
+Two policies, chosen by path (`src/core/cors.py`):
+
+- **The console, and every user-token route**, allow the origins in `CORS_ALLOW_ORIGINS`, with
+  credentials.
+- **`/v1/chat/*` allows any origin**, without credentials — the key travels in a header, and a
+  tenant's new website must not wait for an operator to edit an environment variable and redeploy.
+  *Which* origins may embed a given agent is the tenant's own setting, `allowedOrigins` on its web
+  channel, enforced once the key has identified the agent and answered with `403
+  ORIGIN_NOT_ALLOWED`. An empty list restricts nothing, and a request carrying no `Origin` at all is
+  a server rather than a browser, so it is never refused by this.
+
+Both policies **expose** `X-Request-ID`, `X-Conversation-Id`, the three `X-RateLimit-*` headers and
+`Retry-After`. Without that a browser client can read none of them, however faithfully the server
+sends them.
+
 ---
 
 ## Configuration
@@ -1020,6 +1042,7 @@ regression to look for.
 | Credential encryption at rest | AES-GCM (`SECURITY_ENCRYPTION_KEY`) for WhatsApp tokens, tool API keys, webhook signing secrets |
 | API keys | Hashed; plaintext shown exactly once; per-key scopes and rate limit |
 | SSRF | Endpoint allowlist per agent for tools; URL fetch guards for KB; `*_ALLOW_PRIVATE_URLS` default false |
+| Browser embedding | Per-agent `allowedOrigins` on the web channel, checked on every `/v1/chat/*` request that carries an `Origin` |
 | Prompt injection | Retrieved and ingested content is delimited as **data, never instructions** |
 | Webhook authenticity | Signature verification plus idempotency by message id |
 | Response headers | `nosniff`, `X-Frame-Options: DENY`, `frame-ancestors 'none'`, COOP/CORP, HSTS over HTTPS |

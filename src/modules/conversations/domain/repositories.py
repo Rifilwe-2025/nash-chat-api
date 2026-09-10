@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
+from sqlalchemy.dialects.postgresql import insert
 
 from src.modules.conversations.domain.models import (
     Channel,
@@ -45,6 +46,44 @@ class ConversationRepository(TenantScopedRepository[Conversation]):
             .limit(1)
         )
         return (await self.session.execute(query)).scalar_one_or_none()
+
+    async def open_session(
+        self, agent_id: uuid.UUID, channel: Channel, external_user_id: str
+    ) -> Conversation:
+        """The live session for a key, opened if there is none — correctly when two race for it.
+
+        Looking for a session and then adding one is two statements, and two first messages from
+        the same visitor (a double-click, two tabs) can both find nothing and both add, leaving two
+        open conversations that each get half the transcript. The partial unique index
+        ``uq_conversation_open_session`` makes the second insert a conflict, and ``ON CONFLICT DO
+        NOTHING`` turns that conflict into "join the one that was just opened": Postgres makes the
+        second insert wait for the first transaction, so the read that follows sees its row.
+        """
+        existing = await self.find_open_session(agent_id, channel, external_user_id)
+        if existing is not None:
+            return existing
+
+        await self.session.execute(
+            insert(Conversation)
+            .values(
+                tenant_id=self.tenant_id,
+                agent_id=agent_id,
+                channel=channel,
+                external_user_id=external_user_id,
+                status=ConversationStatus.ACTIVE,
+            )
+            .on_conflict_do_nothing(
+                index_elements=["agent_id", "channel", "external_user_id"],
+                # A literal predicate, not a bound one: Postgres can only match a partial index to
+                # an ON CONFLICT clause whose predicate it can prove at plan time.
+                index_where=text("status = 'active'"),
+            )
+        )
+
+        opened = await self.find_open_session(agent_id, channel, external_user_id)
+        if opened is None:  # pragma: no cover - the insert or the conflicting row guarantees one
+            raise RuntimeError("an open session was neither created nor found")
+        return opened
 
     async def list_conversations(
         self,

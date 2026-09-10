@@ -81,6 +81,7 @@ REQUEST = {
     "UNKNOWN_PROVIDER": "That LLM provider is not one this platform supports.",
     "UNKNOWN_WEBHOOK_EVENT": "That event is not one this platform publishes.",
     "WEBHOOK_NEEDS_EVENT": "A webhook endpoint must subscribe to at least one event.",
+    "INVALID_ORIGIN": "An allowed origin is a scheme and host only, such as `https://example.com`.",
     "KB_SYNC_INTERVAL_TOO_SHORT": "The sync interval is below the configured floor.",
     "KB_SOURCE_EMPTY": "Nothing readable was extracted from that source.",
     "KB_SOURCE_TOO_LARGE": "The upload is larger than the per-source limit.",
@@ -101,6 +102,10 @@ STATE = {
     "CONVERSATION_NOT_ACTIVE": "The conversation is closed or escalated and takes no new turns.",
     "CHANNEL_NOT_CONFIGURED": "That channel has not been set up for this agent.",
     "CHANNEL_DISABLED": "The channel exists but is switched off.",
+    "ORIGIN_NOT_ALLOWED": (
+        "A browser sent this from an origin the agent's web channel does not list. Add the origin "
+        "to its allowed origins, or call the API from your server."
+    ),
     "CHANNEL_NEEDS_SETUP_ROUTE": "This channel has its own connect endpoint; use that instead.",
     "INCOMPLETE_CREDENTIALS": "The channel's credentials are missing a required field.",
     "KB_SOURCE_NOT_SYNCABLE": "Only URL and API sources can be re-synced.",

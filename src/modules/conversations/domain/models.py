@@ -6,10 +6,11 @@ identity, different history, and different delivery rules. ``channel`` exists fr
 though only the builder preview writes to it, so the transports added in Phases 8 and 10 slot into
 a shape that already accounts for them (§5.5's channel-agnostic message format).
 
-There is deliberately **no unique constraint** on that key. A conversation ends — closed, or handed
-to a human — and the same person comes back tomorrow; that is a new conversation with fresh history,
-not a violation. The service resolves the *open* session for a key, which is what "session" means
-here.
+The key is **unique only among active conversations**. A conversation ends — closed, or handed to a
+human — and the same person comes back tomorrow; that is a new conversation with fresh history, not
+a violation, so ended conversations may repeat the key freely. Two *active* ones would be the agent
+holding the same person in two threads at once, which is why ``uq_conversation_open_session`` is a
+partial index and the repository opens a session with ``ON CONFLICT DO NOTHING``.
 
 ``summary`` is what makes a long conversation affordable. Once history outgrows the model's budget
 the oldest turns are folded into a rolling summary on the conversation and dropped from the prompt,
@@ -33,6 +34,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     Uuid,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -79,6 +81,16 @@ class Conversation(TenantScopedModel):
             "channel",
             "external_user_id",
             "status",
+        ),
+        # One open session per key. Without it, two first messages racing each other each open a
+        # conversation and the visitor's transcript is split between them.
+        Index(
+            "uq_conversation_open_session",
+            "agent_id",
+            "channel",
+            "external_user_id",
+            unique=True,
+            postgresql_where=text("status = 'active'"),
         ),
         # Analytics counts conversations started in a window, per tenant (spec §5.8). Without this
         # every usage report is a sequential scan of the table.
