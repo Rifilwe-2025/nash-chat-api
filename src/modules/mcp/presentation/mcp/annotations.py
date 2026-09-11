@@ -45,3 +45,15 @@ REACHES_OUT = ToolAnnotations.model_validate(
         "openWorldHint": True,
     }
 )
+
+#: Destroys something permanently. There is no undo and nothing is versioned, so a client should
+#: always confirm before running one of these. Idempotent only in the weak sense that deleting an
+#: already-deleted thing fails rather than deleting something else.
+REMOVES = ToolAnnotations.model_validate(
+    {
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False,
+        "openWorldHint": False,
+    }
+)

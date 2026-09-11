@@ -12,7 +12,13 @@ from src import configs
 from src.modules.knowledge_base.domain.models import RetrievalTier
 from src.modules.mcp.domain.models import McpScope
 from src.modules.mcp.presentation.mcp import serializers as render
-from src.modules.mcp.presentation.mcp.annotations import CREATES, REACHES_OUT, READ_ONLY, UPDATES
+from src.modules.mcp.presentation.mcp.annotations import (
+    CREATES,
+    REACHES_OUT,
+    READ_ONLY,
+    REMOVES,
+    UPDATES,
+)
 from src.modules.mcp.presentation.mcp.context import workspace
 from src.modules.mcp.presentation.mcp.params import (
     AgentId,
@@ -221,6 +227,32 @@ def register(server: MCPServer[Any]) -> None:
         async with workspace(McpScope.WRITE) as ws:
             await ws.knowledge.detach(kb_id, agent_id)
             return {"kbId": str(kb_id), "agentId": str(agent_id), "attached": False}
+
+    @server.tool(title="Delete knowledge base", annotations=REMOVES)
+    async def delete_knowledge_base(kb_id: KnowledgeBaseId) -> dict[str, Any]:
+        """Permanently delete a knowledge base, every source in it, and its agent attachments.
+
+        There is no undo and no version history for knowledge, so confirm with the user first.
+        The agents themselves are untouched; they simply stop drawing on this knowledge, which a
+        published agent does immediately.
+        """
+        async with workspace(McpScope.WRITE) as ws:
+            await ws.knowledge.delete(kb_id)
+            return {"kbId": str(kb_id), "deleted": True}
+
+    @server.tool(title="Delete knowledge source", annotations=REMOVES)
+    async def delete_knowledge_source(
+        kb_id: KnowledgeBaseId, source_id: SourceId
+    ) -> dict[str, Any]:
+        """Permanently delete one source from a knowledge base.
+
+        The way to correct knowledge that is wrong or superseded: text sources cannot be edited
+        in place, so a fix is a delete plus a fresh add. There is no undo — confirm first, and
+        read the source if you are not certain which one you have.
+        """
+        async with workspace(McpScope.WRITE) as ws:
+            await ws.knowledge.delete_source(kb_id, source_id)
+            return {"kbId": str(kb_id), "sourceId": str(source_id), "deleted": True}
 
     @server.tool(title="Add text source", annotations=CREATES)
     async def add_text_source(

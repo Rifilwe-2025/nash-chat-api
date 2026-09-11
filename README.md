@@ -613,7 +613,8 @@ sequenceDiagram
 | Lifetime | Chosen at issue; revocation or deletion takes effect on the next request. **Signing in does not revoke a token** — tokens have their own table |
 | Rate limit | Per token, `MCP_RATE_LIMIT_PER_MINUTE` |
 
-36 tools cover agents and their versions, knowledge bases and sources, retrieval explanations, agent
+38 tools cover agents and their versions, knowledge bases and sources including deletion, retrieval
+explanations, agent
 tools with their policy and call logs, conversations and preview chats, channels and the integration
 guide, API key metadata, and usage and failure reports. Each tool is a thin adapter in
 `src/modules/mcp/presentation/mcp/tools/` over the owning module's service — the same service a
