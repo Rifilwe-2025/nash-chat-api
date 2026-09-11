@@ -500,3 +500,46 @@ def test_nothing_matching_is_still_no_context() -> None:
 
     assert not result.has_context
     assert result.no_context_reason is NoContextReason.NO_MATCH
+
+
+async def test_a_search_that_finds_nothing_usable_is_retried_widened(
+    service: KnowledgeBaseService, config_override: Callable[..., None]
+) -> None:
+    """The conjunctive search can match one sprawling document and technically return a row while
+    ranking too low to be worth injecting. Widening therefore has to hang on whether the result
+    was good enough, not merely on whether rows came back — a customer asking "I stay in
+    Chitungwiza, is there a branch near me?" was told there was none, about a town that has one.
+    """
+    config_override(KB_DIRECT_INJECTION_MAX_CHARS=500)
+    knowledge_base = await service.create(name="Branches")
+    await service.add_manual_source(
+        knowledge_base.id,
+        title="Chitungwiza",
+        body="There is a Nash Paints branch in Chitungwiza: Chikwanha, Zengeza 4, 0783642508.",
+    )
+    await service.add_manual_source(  # push it over the budget so Tier 2 is chosen
+        knowledge_base.id,
+        title="Colour chart",
+        body=" ".join(f"Teal {index} tinted to order." for index in range(200)),
+    )
+
+    asked: list[str] = []
+    real_search = service.sources.search
+
+    async def recording(kb_ids, text, limit):  # type: ignore[no-untyped-def]
+        asked.append(text)
+        # The first, narrow pass finds nothing worth injecting; the widened retry does the work.
+        return [] if len(asked) == 1 else await real_search(kb_ids, text, limit)
+
+    service.sources.search = recording  # type: ignore[assignment,method-assign]
+
+    result = await service.retrieve(
+        "I stay in Chitungwiza, is there a Nash Paints branch near me? "
+        "I need the address and phone number",
+        kb_id=knowledge_base.id,
+    )
+
+    assert len(asked) == 2, "the failed search should have been retried"
+    assert " or " in asked[1], "the retry should be the widened query"
+    assert result.has_context
+    assert "Chitungwiza" in {passage.citation.source_name for passage in result.passages}

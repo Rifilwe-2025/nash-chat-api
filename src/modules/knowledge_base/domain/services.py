@@ -42,6 +42,7 @@ from src.modules.knowledge_base.domain.repositories import (
     AgentKbLinkRepository,
     KbSourceRepository,
     KnowledgeBaseRepository,
+    widen_query,
 )
 from src.modules.knowledge_base.internal import limits, redaction, tasks
 from src.modules.knowledge_base.internal.extractors import (
@@ -217,16 +218,28 @@ class KnowledgeBaseService:
                 budget_characters=decision.budget_characters,
             )
 
-        matches = await self.sources.search(
-            kb_ids, query, limit=configs.KNOWLEDGE_BASE_KEYWORD_TOP_N
-        )
-        return retrieve_keyword(
-            matches,
-            min_rank=configs.KNOWLEDGE_BASE_KEYWORD_MIN_RANK,
-            relative_floor=configs.KNOWLEDGE_BASE_KEYWORD_RELATIVE_FLOOR,
-            considered_characters=decision.considered_characters,
-            budget_characters=decision.budget_characters,
-        )
+        async def searched(text: str) -> RetrievalResult:
+            return retrieve_keyword(
+                await self.sources.search(kb_ids, text, limit=configs.KNOWLEDGE_BASE_KEYWORD_TOP_N),
+                min_rank=configs.KNOWLEDGE_BASE_KEYWORD_MIN_RANK,
+                relative_floor=configs.KNOWLEDGE_BASE_KEYWORD_RELATIVE_FLOOR,
+                considered_characters=decision.considered_characters,
+                budget_characters=decision.budget_characters,
+            )
+
+        result = await searched(query)
+        if result.has_context:
+            return result
+
+        # Widening belongs here rather than in the repository, because "the narrow search failed"
+        # is a judgement about relevance and only this layer knows the thresholds. A long question
+        # carries enough ordinary words — stay, near, me, need, address — that the conjunctive
+        # search can match one sprawling document and technically succeed, which stopped the
+        # repository widening while leaving a result too weak to clear the gate. A customer asking
+        # "I stay in Chitungwiza, is there a branch near me?" got nothing, about a town with a
+        # branch in it.
+        widened = widen_query(query)
+        return await searched(widened) if widened else result
 
     async def explain_retrieval(
         self,
