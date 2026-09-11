@@ -363,8 +363,7 @@ def test_widen_query_drops_operators_and_repeats() -> None:
     conjunction that widening exists to escape. Stopwords like *to* are left alone — dropping
     them is Postgres's job, and doing it here would mean maintaining a second stopword list."""
     assert (
-        widen_query("Delivery and delivery or DELIVERY to Bulawayo")
-        == "delivery or to or bulawayo"
+        widen_query("Delivery and delivery or DELIVERY to Bulawayo") == "delivery or to or bulawayo"
     )
 
 
