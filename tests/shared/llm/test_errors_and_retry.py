@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+
 import anthropic
 import httpx2
 import openai
 import pytest
 
-from src.shared.llm.base import ChatMessage, CompletionRequest, CompletionResult, Role, TokenUsage
+from src.shared.llm.base import (
+    ChatMessage,
+    CompletionRequest,
+    CompletionResult,
+    LLMProvider,
+    Role,
+    TextStream,
+    TokenUsage,
+)
 from src.shared.llm.errors import (
     LLMAuthenticationError,
     LLMBadRequestError,
@@ -240,6 +250,138 @@ async def test_fallback_to_the_same_provider_is_ignored(monkeypatch: pytest.Monk
 
     with pytest.raises(LLMRateLimitError):
         await client.complete("anthropic", REQUEST)
+
+
+# -- streaming: retried up to the first token, and not after it ---------------------
+
+
+class ScriptedStream(LLMProvider):
+    """A provider whose stream does exactly what a test asks of it, and counts its own builds."""
+
+    name = "anthropic"
+
+    def __init__(self, *, text: str = "", fail: LLMError | None = None, after: int = 0) -> None:
+        self.text = text
+        self.fail = fail
+        #: How many words to yield before failing. Zero means fail before anything is sent.
+        self.after = after
+
+    async def complete(self, request: CompletionRequest) -> CompletionResult:  # pragma: no cover
+        raise NotImplementedError("this fake only streams")
+
+    def stream(self, request: CompletionRequest) -> TextStream:
+        stream = TextStream()
+
+        async def deltas() -> AsyncIterator[str]:
+            words = self.text.split(" ") if self.text else []
+            for index, word in enumerate(words):
+                if self.fail and index == self.after:
+                    raise self.fail
+                yield word if index == 0 else f" {word}"
+            if self.fail and self.after >= len(words):
+                raise self.fail
+            stream.usage = TokenUsage(prompt_tokens=11, completion_tokens=5)
+
+        return stream.attach(deltas())
+
+
+@pytest.fixture
+def instant_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No real backoff, so these tests take microseconds rather than seconds."""
+    monkeypatch.setattr("src.shared.llm.registry.configs.LLM_RETRY_BASE_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("src.shared.llm.registry.configs.LLM_RETRY_MAX_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr("src.shared.llm.registry.configs.LLM_MAX_ATTEMPTS", 3)
+    monkeypatch.setattr("src.shared.llm.registry.configs.LLM_FALLBACK_PROVIDER", "")
+
+
+async def read(stream: TextStream) -> str:
+    return "".join([delta async for delta in stream])
+
+
+async def test_a_stream_that_fails_before_the_first_token_is_retried(
+    instant_retries: None,
+) -> None:
+    """The blip `complete` has always retried, on the path that used to surface it as a failure."""
+    built: list[str] = []
+
+    def factory(name: str, key: str | None) -> LLMProvider:
+        built.append(name)
+        if len(built) == 1:
+            return ScriptedStream(fail=LLMUnavailableError("upstream reset", provider=name))
+        return ScriptedStream(text="Silk suits a bathroom.")
+
+    stream = LLMClient(provider_factory=factory).stream("anthropic", REQUEST)
+
+    assert await read(stream) == "Silk suits a bathroom."
+    assert built == ["anthropic", "anthropic"], "the second attempt is the same provider"
+    assert stream.usage.completion_tokens == 5, "usage comes from the attempt that answered"
+
+
+async def test_a_stream_that_fails_after_the_first_token_is_not_retried(
+    instant_retries: None,
+) -> None:
+    """Bytes already sent cannot be un-sent, so a restart would repeat what was read."""
+    built: list[str] = []
+
+    def factory(name: str, key: str | None) -> LLMProvider:
+        built.append(name)
+        return ScriptedStream(
+            text="Silk suits a bathroom.",
+            fail=LLMUnavailableError("dropped mid-answer", provider=name),
+            after=2,
+        )
+
+    stream = LLMClient(provider_factory=factory).stream("anthropic", REQUEST)
+
+    seen: list[str] = []
+    with pytest.raises(LLMUnavailableError):
+        async for delta in stream:
+            seen.append(delta)
+
+    assert "".join(seen) == "Silk suits", "what arrived is still what arrived"
+    assert built == ["anthropic"], "one attempt only, once the caller has seen something"
+
+
+async def test_a_stream_that_cannot_succeed_is_not_retried_either(
+    instant_retries: None,
+) -> None:
+    """A malformed request fails identically on every attempt; retrying just bills for it twice."""
+    built: list[str] = []
+
+    def factory(name: str, key: str | None) -> LLMProvider:
+        built.append(name)
+        return ScriptedStream(fail=LLMBadRequestError("model does not exist", provider=name))
+
+    with pytest.raises(LLMBadRequestError):
+        await read(LLMClient(provider_factory=factory).stream("anthropic", REQUEST))
+
+    assert built == ["anthropic"]
+
+
+async def test_a_stream_falls_back_once_its_retries_are_spent(
+    instant_retries: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("src.shared.llm.registry.configs.LLM_FALLBACK_PROVIDER", "openai")
+    built: list[str] = []
+
+    def factory(name: str, key: str | None) -> LLMProvider:
+        built.append(name)
+        if name == "anthropic":
+            return ScriptedStream(fail=LLMRateLimitError("saturated", provider=name))
+        return ScriptedStream(text="Answered by the second choice.")
+
+    stream = LLMClient(provider_factory=factory).stream("anthropic", REQUEST)
+
+    assert await read(stream) == "Answered by the second choice."
+    assert built == ["anthropic", "anthropic", "anthropic", "openai"]
+
+
+async def test_a_stream_gives_up_when_there_is_no_fallback(instant_retries: None) -> None:
+    def factory(name: str, key: str | None) -> LLMProvider:
+        return ScriptedStream(fail=LLMUnavailableError("still down", provider=name))
+
+    with pytest.raises(LLMUnavailableError):
+        await read(LLMClient(provider_factory=factory).stream("anthropic", REQUEST))
 
 
 def test_token_usage_adds_up() -> None:
