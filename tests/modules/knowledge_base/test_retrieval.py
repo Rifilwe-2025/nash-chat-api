@@ -531,7 +531,7 @@ async def test_a_search_that_finds_nothing_usable_is_retried_widened(
         # The first, narrow pass finds nothing worth injecting; the widened retry does the work.
         return [] if len(asked) == 1 else await real_search(kb_ids, text, limit)
 
-    service.sources.search = recording  # type: ignore[assignment,method-assign]
+    service.sources.search = recording  # type: ignore[method-assign]
 
     result = await service.retrieve(
         "I stay in Chitungwiza, is there a Nash Paints branch near me? "
