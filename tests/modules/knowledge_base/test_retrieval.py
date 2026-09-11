@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.agents.domain.services import AgentService
 from src.modules.knowledge_base.domain.models import KnowledgeBase, RetrievalTier
+from src.modules.knowledge_base.domain.repositories import widen_query
 from src.modules.knowledge_base.domain.services import KnowledgeBaseService
 from src.modules.knowledge_base.internal.retrieval import NoContextReason
 from src.modules.tenants.domain.models import Tenant
@@ -346,3 +347,70 @@ async def test_retrieval_cannot_reach_another_tenants_knowledge(
         await mine.retrieve("margin", kb_id=secret.id)
 
     assert "KB_NOT_FOUND" in str(getattr(caught.value, "code", ""))
+
+
+# -- widening when the narrow pass matches nothing ------------------------------------------
+
+
+def test_widen_query_leaves_nothing_to_do_for_a_single_term() -> None:
+    """One term is already its own disjunction — a second pass would repeat the first."""
+    assert widen_query("gamazine") is None
+    assert widen_query("   ") is None
+
+
+def test_widen_query_drops_operators_and_repeats() -> None:
+    """`or` and `and` are ``websearch_to_tsquery`` syntax; feeding them back would rebuild the
+    conjunction that widening exists to escape. Stopwords like *to* are left alone — dropping
+    them is Postgres's job, and doing it here would mean maintaining a second stopword list."""
+    assert (
+        widen_query("Delivery and delivery or DELIVERY to Bulawayo")
+        == "delivery or to or bulawayo"
+    )
+
+
+async def test_a_conversational_opener_no_longer_empties_the_result(
+    service: KnowledgeBaseService, config_override: Callable[..., None]
+) -> None:
+    """Postgres drops *can* and *I* as stopwords but not *hi* or *please*, so those became terms
+    every document had to contain. Customers write like this constantly."""
+    config_override(KB_DIRECT_INJECTION_MAX_CHARS=500)
+    knowledge_base = await stocked(service, padding=200)
+
+    result = await service.retrieve(
+        "Hi, can I return tinted paint please?", kb_id=knowledge_base.id
+    )
+
+    assert result.tier is RetrievalTier.KEYWORD
+    assert result.has_context
+    assert "Returns" in {passage.citation.source_name for passage in result.passages}
+
+
+async def test_a_question_about_two_subjects_returns_both(
+    service: KnowledgeBaseService, config_override: Callable[..., None]
+) -> None:
+    """The quotation shape. Conjunctive search cannot answer it at all: no single document holds
+    every term, so the agent was handed the no-context note and fell back to its sales contact."""
+    config_override(KB_DIRECT_INJECTION_MAX_CHARS=500, KB_KEYWORD_MIN_RANK=0.0)
+    knowledge_base = await stocked(service, padding=200)
+
+    result = await service.retrieve(
+        "delivery to Bulawayo and coverage per litre", kb_id=knowledge_base.id
+    )
+
+    assert result.has_context
+    names = {passage.citation.source_name for passage in result.passages}
+    assert {"Delivery", "Coverage"} <= names
+
+
+async def test_a_query_that_already_matches_is_not_widened(
+    service: KnowledgeBaseService, config_override: Callable[..., None]
+) -> None:
+    """Widening runs only where the narrow pass returned nothing, so precision is unchanged for
+    every query that worked before."""
+    config_override(KB_DIRECT_INJECTION_MAX_CHARS=500)
+    knowledge_base = await stocked(service, padding=200)
+
+    result = await service.retrieve("delivery to Bulawayo", kb_id=knowledge_base.id)
+
+    assert result.has_context
+    assert {passage.citation.source_name for passage in result.passages} == {"Delivery"}
