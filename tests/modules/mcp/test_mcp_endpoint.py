@@ -422,3 +422,52 @@ async def test_allowed_origins_are_set_without_losing_other_settings(
 
     assert configured["settings"]["allowedOrigins"] == ["https://shop.example.com"]
     assert error_code(refused) == "INVALID_ORIGIN"
+
+
+async def test_a_source_can_be_deleted_and_the_knowledge_base_survives(
+    app: FastAPI, client: AsyncClient
+) -> None:
+    """Text sources cannot be edited in place, so correcting knowledge that has gone stale means
+    deleting it and adding the replacement. Without a delete over MCP the wrong source stays,
+    competes for retrieval, and keeps being answered from."""
+    auth, _ = await account(client)
+    token = await issue_token(client, auth, WRITE)
+
+    async with serving(app):
+        kb = await value_of(client, token, "create_knowledge_base", {"name": "Branches"})
+        stale = await value_of(
+            client,
+            token,
+            "add_text_source",
+            {"kb_id": kb["id"], "title": "Rusape", "body": "There is no branch in Rusape."},
+        )
+        await value_of(
+            client,
+            token,
+            "delete_knowledge_source",
+            {"kb_id": kb["id"], "source_id": stale["id"]},
+        )
+
+        listed = await value_of(client, token, "list_knowledge_sources", {"kb_id": kb["id"]})
+        assert listed["totalItems"] == 0
+        assert (await value_of(client, token, "get_knowledge_base", {"kb_id": kb["id"]}))["id"]
+
+
+async def test_a_knowledge_base_can_be_deleted_with_everything_in_it(
+    app: FastAPI, client: AsyncClient
+) -> None:
+    auth, _ = await account(client)
+    token = await issue_token(client, auth, WRITE)
+
+    async with serving(app):
+        kb = await value_of(client, token, "create_knowledge_base", {"name": "Superseded"})
+        await value_of(
+            client,
+            token,
+            "add_text_source",
+            {"kb_id": kb["id"], "title": "Old prices", "body": "PVA 20L costs ten dollars."},
+        )
+        await value_of(client, token, "delete_knowledge_base", {"kb_id": kb["id"]})
+
+        remaining = await value_of(client, token, "list_knowledge_bases", {})
+        assert kb["id"] not in {row["id"] for row in remaining["items"]}
