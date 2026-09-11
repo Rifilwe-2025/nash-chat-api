@@ -18,10 +18,16 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.agents.domain.services import AgentService
-from src.modules.knowledge_base.domain.models import KnowledgeBase, RetrievalTier
+from src.modules.knowledge_base.domain.models import (
+    KbSource,
+    KnowledgeBase,
+    RetrievalTier,
+    SourceType,
+)
 from src.modules.knowledge_base.domain.repositories import _share_of, widen_query
 from src.modules.knowledge_base.domain.services import KnowledgeBaseService
 from src.modules.knowledge_base.internal.retrieval import NoContextReason
+from src.modules.knowledge_base.internal.retrieval.keyword import retrieve_keyword
 from src.modules.tenants.domain.models import Tenant
 from src.shared.exceptions import ValidationException
 
@@ -453,3 +459,44 @@ async def test_a_big_knowledge_base_does_not_take_every_slot_from_a_small_one(
     result = await service.retrieve("emulsion paint", agent_id=agent.id)
 
     assert prices.id in {passage.citation.kb_id for passage in result.passages}
+
+
+# -- the relevance floor is comparative --------------------------------------------------------
+
+
+def test_a_weak_best_match_still_yields_context() -> None:
+    """ts_rank_cd falls as a question grows, so an absolute floor rejects real answers to
+    conversational questions. A customer asking about a town that has a branch was told there
+    was none, because the sentence they typed scored below the floor the two-word version
+    cleared."""
+    source = KbSource(id=uuid.uuid4(), kb_id=uuid.uuid4(), name="Branches", type=SourceType.MANUAL)
+    result = retrieve_keyword(
+        [(source, 0.003, "Chikwanha (Chitungwiza), 0783642508.")],
+        min_rank=0.0005,
+        relative_floor=0.25,
+    )
+
+    assert result.has_context
+    assert result.passages[0].score == pytest.approx(0.003)
+
+
+def test_the_tail_is_dropped_relative_to_the_best_row_in_the_same_knowledge_base() -> None:
+    """A strong match still sheds the documents that merely share a common word with it —
+    compared within one knowledge base, since scores are not comparable across them."""
+    kb_id = uuid.uuid4()
+    strong = KbSource(id=uuid.uuid4(), kb_id=kb_id, name="Answer", type=SourceType.MANUAL)
+    weak = KbSource(id=uuid.uuid4(), kb_id=kb_id, name="Noise", type=SourceType.MANUAL)
+    result = retrieve_keyword(
+        [(strong, 40.0, "The answer."), (weak, 1.0, "Shares one word.")],
+        min_rank=0.0005,
+        relative_floor=0.25,
+    )
+
+    assert [passage.citation.source_name for passage in result.passages] == ["Answer"]
+
+
+def test_nothing_matching_is_still_no_context() -> None:
+    result = retrieve_keyword([], min_rank=0.0005, relative_floor=0.25)
+
+    assert not result.has_context
+    assert result.no_context_reason is NoContextReason.NO_MATCH

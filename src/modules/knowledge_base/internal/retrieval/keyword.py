@@ -14,6 +14,7 @@ while an agent handed irrelevant text will answer from it (spec §5.2, §5.1).
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Sequence
 
 from src.modules.knowledge_base.domain.models import KbSource, RetrievalTier
@@ -28,21 +29,41 @@ from src.modules.knowledge_base.internal.retrieval.direct import citation_for
 def retrieve_keyword(
     matches: Sequence[tuple[KbSource, float, str]],
     min_rank: float,
+    relative_floor: float = 0.0,
     considered_characters: int = 0,
     budget_characters: int = 0,
 ) -> RetrievalResult:
-    """Turn ranked search rows into passages, dropping anything below the threshold.
+    """Turn ranked search rows into passages, dropping anything not worth injecting.
 
-    ``matches`` arrives ordered by rank, so the first row is the best available answer; if even
-    that is below the threshold the whole result is noise and none of it is worth injecting.
+    Two thresholds, because relevance is comparative and ``ts_rank_cd`` is not stable across
+    queries. Its scores fall as a question grows, so one absolute floor is at once too high for a
+    sentence and too low for two words: "Chitungwiza branch address" scored 0.028 while "I stay in
+    Chitungwiza, is there a Nash Paints branch near me? I need the address and phone number"
+    scored under 0.005 against the same document. The floor turned the second into "there is no
+    branch in Chitungwiza" — about a town that has one.
+
+    So ``min_rank`` is only the cheap "did anything match at all" gate, and ``relative_floor``
+    does the real filtering, against the best row actually found. A weak best match keeps the rows
+    beside it rather than none; a strong one still drops the tail that merely shares a common word.
+
+    Compared **within** each knowledge base, never across them. Scores are not comparable between
+    bodies of knowledge any more than they are between queries: a library of long datasheets
+    outscores a file of short price lines on the same question, and one floor taken from the best
+    row overall would discard the smaller knowledge base entirely — the starvation the repository
+    layer already shares slots out to prevent.
     """
     if not matches:
         return _empty(NoContextReason.NO_MATCH, considered_characters, budget_characters)
 
+    best_per_kb: dict[uuid.UUID, float] = {}
+    for source, rank, _ in matches:
+        if rank > best_per_kb.get(source.kb_id, 0.0):
+            best_per_kb[source.kb_id] = rank
+
     passages = [
         Passage(text=headline.strip(), citation=citation_for(source), score=rank)
         for source, rank, headline in matches
-        if rank >= min_rank and headline.strip()
+        if rank >= max(min_rank, best_per_kb[source.kb_id] * relative_floor) and headline.strip()
     ]
 
     if not passages:
