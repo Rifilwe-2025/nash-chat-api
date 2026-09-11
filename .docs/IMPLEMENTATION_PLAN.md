@@ -31,6 +31,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] **Phase 13** — Hardening & v1 release readiness · `chore/v1-hardening`
 - [x] ~~**Phase 14** *(v1.1)* — Plan limits & usage metering~~ · **reverted** — the platform does not charge for use; accounts are enabled and disabled instead
 - [x] **Phase 15** — Platform administration & account status · `feat/platform-admin`
+- [x] **Phase 16** — MCP server for coding agents · `feat/mcp-server`
 
 ---
 
@@ -577,6 +578,36 @@ a specific *user*, and any admin write path that bypasses a module's own service
 **Done when:** a disabled tenant's users cannot sign in and its API keys are refused, an admin can
 disable and re-enable an account and act as any tenant through the ordinary endpoints, and a
 non-admin sending the same header is scoped to their own tenant exactly as before.
+
+---
+
+## Phase 16 — MCP server for coding agents
+
+- [x] **Complete** · **Branch:** `feat/mcp-server`
+**Depends on:** Phase 15
+
+**Delivers**
+- `src/modules/mcp/` — **personal access tokens** (`personal_access_token`, migration 0019): a third
+  credential beside the session JWT and the agent API key. Issued per user, stored as a hash, shown
+  once, scoped `mcp:read` / `mcp:write`, with an optional expiry and immediate revocation — and kept
+  out of the `token` table, so signing in never revokes one.
+- `/mcp-tokens` routes for the console: issue, list (your own only), get, revoke, and the connection
+  details a client needs. Always the caller's own tenant; `X-Tenant-Id` is ignored.
+- `POST /mcp` — a stateless Streamable HTTP endpoint on the official MCP Python SDK, authenticated
+  and rate limited per token, serving 36 tools across agents, knowledge, tools, conversations,
+  channels, API key metadata and analytics. Each tool is a thin adapter over the owning module's
+  service, runs in its own transaction, and carries the `AppException` code into its error.
+- The service seams the adapters needed, now shared with the REST routes:
+  `ChannelService.integration_guide` and `analytics.domain.services.reporting_window`.
+
+**Not in this phase:** OAuth 2.1 authorization for MCP clients (token verification is one function,
+so it is additive), delete tools, reading or writing any secret (provider keys, tool credentials,
+WhatsApp credentials, agent API key secrets), and platform-admin impersonation over MCP.
+
+**Done when:** a coding agent configured with a token can list the tools and build, test, publish and
+integrate an agent end to end; a read-only token cannot change anything; a token sees only its own
+tenant; revoking a token, disabling the account or exceeding the rate limit refuses the next request;
+and signing in again does not revoke a token.
 
 ---
 

@@ -32,7 +32,13 @@ AUTHENTICATION = {
     "TENANT_NOT_FOUND": "The tenant behind this token no longer exists.",
     "MISSING_API_KEY": "The public chat API needs an agent API key, as bearer or `X-API-Key`.",
     "INVALID_API_KEY": "The key does not exist, is revoked, or has expired. All read alike.",
-    "INSUFFICIENT_SCOPE": "The key is valid but was not issued with the scope this route needs.",
+    "INSUFFICIENT_SCOPE": (
+        "The key or personal access token is valid but was not issued with the scope this needs."
+    ),
+    "INVALID_PERSONAL_TOKEN": (
+        "The personal access token does not exist, is revoked, or has expired. All read alike."
+    ),
+    "PERSONAL_TOKEN_EXPIRY_IN_PAST": "A personal access token cannot be issued already expired.",
     "API_KEY_NEEDS_SCOPE": "A key must be issued with at least one scope.",
     "UNKNOWN_SCOPE": "A scope in the request is not one this platform defines.",
     "API_KEY_NOT_FOUND": "No such key in your tenant.",
@@ -58,6 +64,7 @@ NOT_FOUND = {
     "CONVERSATION_NOT_FOUND": "No such conversation in your tenant.",
     "TOOL_NOT_FOUND": "No such tool in your tenant.",
     "WEBHOOK_NOT_FOUND": "No such webhook endpoint in your tenant.",
+    "PERSONAL_TOKEN_NOT_FOUND": "No such personal access token on your account.",
 }
 
 REQUEST = {

@@ -138,7 +138,17 @@ def test_only_repositories_and_the_shared_base_build_queries() -> None:
 
 
 def controllers() -> list[Path]:
-    return [path for path in python_files(MODULES) if "presentation/api" in path.as_posix()]
+    """Routers, and the MCP tool adapters beside them.
+
+    ``presentation/mcp`` is the second presentation layer — a tool call is a request that arrived
+    over a different protocol — so it is held to exactly the rules a router is: no ORM, no
+    repository, only services.
+    """
+    return [
+        path
+        for path in python_files(MODULES)
+        if "presentation/api" in path.as_posix() or "presentation/mcp" in path.as_posix()
+    ]
 
 
 def test_routers_touch_no_repository_and_no_orm() -> None:

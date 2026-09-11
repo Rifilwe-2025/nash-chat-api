@@ -8,10 +8,10 @@ web client or WhatsApp through a generated API key.
 
 | | |
 |---|---|
-| API surface | 76 paths / 99 operations across 13 tags |
-| Schema | 18 domain tables, 18 migrations |
-| Error catalogue | 90 stable machine-readable codes |
-| Test suite | 937 tests against a real Postgres |
+| API surface | 80 paths / 104 operations across 14 tags, plus the `/mcp` endpoint |
+| Schema | 19 domain tables, 19 migrations |
+| Error catalogue | 93 stable machine-readable codes |
+| Test suite | 968 tests against a real Postgres |
 
 ---
 
@@ -32,6 +32,7 @@ web client or WhatsApp through a generated API key.
   - [Tools — live API calls](#tools--live-api-calls)
   - [Channels](#channels)
   - [Authentication](#authentication)
+  - [Coding agents — MCP](#coding-agents--mcp)
 - [API reference](#api-reference)
 - [API conventions](#api-conventions)
 - [Configuration](#configuration)
@@ -150,8 +151,8 @@ src/
     └── presentation/      #   dtos/ (Pydantic, camelCase aliases) + api/ (thin routers)
 ```
 
-Twelve modules: `admin`, `agents`, `analytics`, `api_keys`, `auth`, `channels` (with `web` and
-`whatsapp` sub-modules), `conversations`, `knowledge_base`, `system`, `tenants`, `tools`.
+Thirteen modules: `admin`, `agents`, `analytics`, `api_keys`, `auth`, `channels` (with `web` and
+`whatsapp` sub-modules), `conversations`, `knowledge_base`, `mcp`, `system`, `tenants`, `tools`.
 
 ### Layering rules
 
@@ -544,7 +545,8 @@ verifies.
 
 ### Authentication
 
-Two credential types, for two different audiences:
+Three credential types, for three different audiences — the two below, and the personal
+access token a coding agent presents (see [Coding agents — MCP](#coding-agents--mcp)):
 
 ```mermaid
 sequenceDiagram
@@ -576,6 +578,51 @@ sequenceDiagram
 Passwords are hashed with **argon2**. A key is issued for one agent, carries explicit scopes and its
 own rate limit, and revocation takes effect on the next request.
 
+### Coding agents — MCP
+
+A developer's own coding agent — Claude Code, Cursor, VS Code, Codex, anything that speaks the
+[Model Context Protocol](https://modelcontextprotocol.io) — can work with the platform directly:
+build an agent, feed it knowledge, test it in a preview chat, publish it, and read the integration
+guide it then writes code against.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as User (console)
+    participant API as API
+    participant CA as Coding agent
+
+    U->>API: POST /mcp-tokens (name, scopes, expiry)
+    API-->>U: nsp_… token — shown exactly once
+    U->>CA: add the /mcp endpoint with Authorization: Bearer nsp_…
+    CA->>API: POST /mcp — tools/list, tools/call
+    API->>API: verify token and account, count the per-token limit
+    API->>API: one transaction per tool call, tenant from the token
+    API-->>CA: result, or an error carrying CODE: detail
+```
+
+| | |
+|---|---|
+| Endpoint | `POST /mcp` — Streamable HTTP, **stateless**, JSON responses, so any worker serves any request |
+| Credential | A **personal access token** (`nsp_…`) issued per user from `/mcp-tokens`, stored as a hash, shown once |
+| Scopes | `mcp:read` (the default) to inspect; `mcp:write` to create and change — it includes `mcp:read` |
+| Tenancy | The token's own user and tenant. `X-Tenant-Id` is never honoured, and a token is never issued "as" another tenant |
+| Lifetime | Chosen at issue; revocation takes effect on the next request. **Signing in does not revoke a token** — tokens have their own table |
+| Rate limit | Per token, `MCP_RATE_LIMIT_PER_MINUTE` |
+
+36 tools cover agents and their versions, knowledge bases and sources, retrieval explanations, agent
+tools with their policy and call logs, conversations and preview chats, channels and the integration
+guide, API key metadata, and usage and failure reports. Each tool is a thin adapter in
+`src/modules/mcp/presentation/mcp/tools/` over the owning module's service — the same service a
+router calls — so every tenant-scoping, validation and lifecycle rule applies unchanged, and
+`tests/architecture/test_layering.py` holds the adapters to the router rules.
+
+**What never crosses MCP:** provider API keys, tool credentials, WhatsApp credentials, webhook
+secrets and agent API key secrets. Rows are rendered field by field so none of them can reach a
+language model's context, and the server's instructions send the coding agent to the user and the
+console for them. There are no delete tools. Knowledge text, transcripts, preview replies and tool
+results are marked to the coding agent as data, never instructions.
+
 ---
 
 ## API reference
@@ -604,6 +651,7 @@ Auth column:
 |---|---|
 | 🔑 | User JWT — `Authorization: Bearer <accessToken>` |
 | 🎫 | Agent API key — `Authorization: Bearer <key>` or `X-API-Key` |
+| 🪪 | Personal access token — `Authorization: Bearer <token>` (the `/mcp` endpoint only) |
 | 🛡️ | User JWT that must **also** carry the platform-admin flag |
 | 🎚️ | No scheme; gated by the `OBSERVABILITY_OPERATOR_TOKEN` header |
 | ⬜ | Public — no credential |
@@ -708,6 +756,17 @@ token. Every response carries the key's remaining rate-limit allowance.
 | 🔑 | `GET` | `/api-keys/{key_id}` | Get a key's metadata |
 | 🔑 | `PATCH` | `/api-keys/{key_id}` | Update scopes, rate limit, expiry |
 | 🔑 | `POST` | `/api-keys/{key_id}/revoke` | Revoke — effective on the next request |
+
+### `mcp` — coding-agent access
+
+| | Method | Path | Description |
+|---|---|---|---|
+| 🔑 | `GET` | `/mcp-tokens/connection` | Endpoint URL, transport, scopes and rate limit, for configuring a client |
+| 🔑 | `GET` | `/mcp-tokens` | List **your own** personal access tokens |
+| 🔑 | `POST` | `/mcp-tokens` | Issue a token — **plaintext shown exactly once** |
+| 🔑 | `GET` | `/mcp-tokens/{token_id}` | Get one of your tokens |
+| 🔑 | `POST` | `/mcp-tokens/{token_id}/revoke` | Revoke — effective on the next request |
+| 🪪 | `POST` | `/mcp` | The MCP endpoint (Streamable HTTP). Not in the OpenAPI schema: it speaks JSON-RPC, not the envelope |
 
 ### `channels` — reachability and integration
 
@@ -867,7 +926,7 @@ python -m src.configs.generate
 
 Sections: `app`, `server`, `database`, `redis`, `llm`, `conversations`, `knowledge_base`, `auth`,
 `queue`, `sync`, `tools`, `analytics`, `observability`, `admin`, `security`, `rate_limit`,
-`webhooks`, `whatsapp`, `docs`, `logging`, `cors`.
+`webhooks`, `whatsapp`, `mcp`, `docs`, `logging`, `cors`.
 
 ### Settings that bite
 
@@ -879,11 +938,13 @@ Sections: `app`, `server`, `database`, `redis`, `llm`, `conversations`, `knowled
 | `RATE_LIMIT_BACKEND` | `memory` | Use `redis` with more than one worker. |
 | `KB_ALLOW_PRIVATE_URLS` | `false` | Leave false anywhere reachable from outside: it is what stops a submitted URL reaching internal services (SSRF). |
 | `TOOLS_ALLOW_PRIVATE_URLS` | `false` | Same, and worse — a tool endpoint is called with model-written arguments. |
-| `PUBLIC_BASE_URL` | *empty* | The origin this API is reachable at from outside. Every URL written down for somebody else — the integration guide, the WhatsApp callback — is built from it. Empty uses the request's own origin, which is correct locally and the *internal* origin behind a proxy: a guide telling a tenant to POST to `http://api:8000` is worse than no guide, and a PDF carrying it outlives the request. |
+| `PUBLIC_BASE_URL` | *empty* | The origin this API is reachable at from outside. Every URL written down for somebody else — the integration guide, the WhatsApp callback, the MCP endpoint a developer configures — is built from it. Empty uses the request's own origin, which is correct locally and the *internal* origin behind a proxy: a guide telling a tenant to POST to `http://api:8000` is worse than no guide, and a PDF carrying it outlives the request. |
 | `WHATSAPP_PUBLIC_BASE_URL` | *empty* | Must be the origin Meta can reach. Empty uses the request's own origin, which is correct locally and wrong behind a proxy. |
 | `LLM_PRICE_TABLE` | *empty* | Per-model USD per million tokens, e.g. `gpt-4o=2.5/10,claude-sonnet-4-5=3/15`. Empty records tokens but not cost — **the platform never guesses at pricing**. |
 | `LLM_FALLBACK_PROVIDER` | *empty* | Provider to use when the configured one is rate limited or down. Empty disables fallback. |
 | `OBSERVABILITY_OPERATOR_TOKEN` | *empty* | Opens `GET /analytics/operations`. Empty leaves it closed. |
+| `MCP_ENABLED` | `true` | Serves `/mcp` to coding agents. Off removes the route; the token routes stay, so the console never breaks. |
+| `MCP_RATE_LIMIT_PER_MINUTE` | `120` | Per personal access token. An editor lists tools and reconnects as well as calling them, so keep it well above a person's pace — and use `RATE_LIMIT_BACKEND=redis` with more than one worker, as for every limit. |
 | `DATABASE_TEST_URL` | — | **The suite drops and recreates this database on every run.** Never point it at the app database. |
 
 ---

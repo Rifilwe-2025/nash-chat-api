@@ -16,10 +16,12 @@ import asyncio
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import configs
+from src.modules.agents.domain.models import Agent
 from src.modules.agents.domain.services import AgentService
 from src.modules.channels.domain.messages import IncomingMessage, OutgoingMessage
 from src.modules.channels.domain.models import (
@@ -34,7 +36,7 @@ from src.modules.channels.domain.repositories import (
     ChannelConfigRepository,
     WebhookEndpointRepository,
 )
-from src.modules.channels.internal import origins, webhooks
+from src.modules.channels.internal import integration_docs, origins, webhooks
 from src.modules.conversations.domain.models import Channel, Conversation
 from src.modules.conversations.domain.services import ConversationService, StreamedTurn
 from src.shared.database.pagination import Page, PageRequest
@@ -46,6 +48,10 @@ from src.shared.exceptions import (
 )
 
 logger = logging.getLogger("api.channels")
+
+#: What the integration guide shows in place of a real key when it is not written for one.
+GUIDE_KEY_PLACEHOLDER = "nsk_live_xxx"
+GUIDE_DEFAULT_SCOPES: tuple[str, ...] = ("chat:write", "chat:read")
 
 CHANNEL_MAP: dict[str, Channel] = {
     ChannelType.WEB.value: Channel.WEB,
@@ -310,6 +316,48 @@ class ChannelService:
         """The origins this agent's web channel accepts browser requests from; empty means all."""
         config = await self.configs.for_agent(agent_id, ChannelType.WEB)
         return origins.configured(config.settings_json if config else None)
+
+    # -- integration guide ---------------------------------------------------
+
+    async def integration_guide(
+        self,
+        agent_id: uuid.UUID,
+        *,
+        base_url: str,
+        schema: dict[str, Any],
+        key_prefix: str = GUIDE_KEY_PLACEHOLDER,
+        scopes: list[str] | None = None,
+        rate_limit: int | None = None,
+    ) -> tuple[Agent, str]:
+        """The integration guide for one agent, as Markdown.
+
+        One builder for every caller — the console's read and download routes, and a coding agent
+        asking over MCP — so what a developer is told cannot drift between them. The caller
+        supplies what only it knows: the origin the guide should name (behind a proxy the request's
+        own is the internal one) and the schema of the API it is being served from.
+
+        The WhatsApp section appears only when a number is actually connected.
+        """
+        agent = await self.agents.get(agent_id)
+        whatsapp = await self.configs.for_agent(agent.id, ChannelType.WHATSAPP)
+        default_rate: int = configs.RATE_LIMIT_DEFAULT_PER_MINUTE
+
+        markdown = integration_docs.build(
+            agent_name=agent.name,
+            agent_id=str(agent.id),
+            base_url=base_url,
+            key_prefix=key_prefix,
+            scopes=scopes if scopes is not None else list(GUIDE_DEFAULT_SCOPES),
+            rate_limit=rate_limit if rate_limit is not None else default_rate,
+            signature_header=configs.WEBHOOKS_SIGNATURE_HEADER,
+            schema=schema,
+            allowed_origins=await self.allowed_origins(agent.id),
+            whatsapp_connection_id=str(whatsapp.id) if whatsapp else None,
+            whatsapp_phone_number_id=(
+                str(whatsapp.credentials_json.get("phoneNumberId") or "") if whatsapp else None
+            ),
+        )
+        return agent, markdown
 
     def _web_settings(self, settings: dict[str, object]) -> dict[str, object]:
         """Validate the web channel's allowlist, and store it normalised for exact matching."""
