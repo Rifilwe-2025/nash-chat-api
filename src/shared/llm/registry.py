@@ -10,8 +10,9 @@ through ``get_provider``, so the day that decision is made it is a lookup change
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
 
 from src import configs
 from src.shared.llm.base import CompletionRequest, CompletionResult, LLMProvider, TextStream
@@ -24,7 +25,7 @@ from src.shared.llm.errors import (
 from src.shared.llm.providers.anthropic_provider import AnthropicProvider
 from src.shared.llm.providers.gemini_provider import GeminiProvider
 from src.shared.llm.providers.openai_provider import OpenAIProvider
-from src.shared.llm.retry import with_retries
+from src.shared.llm.retry import backoff_delay, with_retries
 from src.shared.observability import PROVIDER_CALLS, PROVIDER_DURATION, PROVIDER_ERRORS, metrics
 
 logger = logging.getLogger("api.llm")
@@ -87,8 +88,76 @@ class LLMClient:
         request: CompletionRequest,
         api_key: str | None = None,
     ) -> TextStream:
-        """Streaming has no retry: bytes already sent to the client cannot be un-sent."""
-        return self._build(provider, api_key).stream(request)
+        """Stream a reply, retried only while nothing has reached the caller.
+
+        Bytes already sent cannot be un-sent, so a stream that has produced text is not restartable
+        — that half was always right. But a stream that has produced *nothing* has sent nothing, and
+        a provider failing at that point is the same transient blip ``complete`` retries as a matter
+        of course. Treating the whole stream as unretryable is what made one vendor hiccup a visibly
+        failed turn on the streamed path and invisible on the buffered one.
+
+        So: the same retry budget and the same fallback as ``complete``, up until the first token,
+        and nothing after it.
+        """
+        stream = TextStream()
+
+        async def deltas() -> AsyncIterator[str]:
+            attempts = max(1, int(configs.LLM_MAX_ATTEMPTS))
+            produced = False
+            last: LLMError | None = None
+
+            for attempt in range(attempts):
+                metrics.increment(PROVIDER_CALLS, provider=provider)
+                source = self._build(provider, api_key).stream(request)
+                try:
+                    async for delta in source:
+                        produced = True
+                        yield delta
+                    stream.usage = source.usage
+                    return
+                except LLMError as exc:
+                    metrics.increment(PROVIDER_ERRORS, provider=provider, error=type(exc).__name__)
+                    # Past the first token there is nothing to retry into: the caller has already
+                    # been shown part of an answer, and a second attempt would repeat it.
+                    if produced or not exc.retryable:
+                        raise
+                    last = exc
+                    if attempt < attempts - 1:
+                        await asyncio.sleep(self._pause_after(exc, attempt))
+
+            fallback = (
+                self._fallback_for(provider)
+                if isinstance(last, LLMRateLimitError | LLMUnavailableError)
+                else None
+            )
+            if fallback is None:
+                raise last if last else RuntimeError("stream ended without a result")
+
+            logger.warning(
+                "provider %s unavailable on a stream (%s); falling back to %s",
+                provider,
+                type(last).__name__,
+                fallback,
+            )
+            metrics.increment(PROVIDER_CALLS, provider=fallback)
+            second = self._build(fallback, None).stream(request)
+            async for delta in second:
+                yield delta
+            stream.usage = second.usage
+
+        return stream.attach(deltas())
+
+    @staticmethod
+    def _pause_after(error: LLMError, attempt: int) -> float:
+        """The same backoff ``with_retries`` uses, including a rate limit's own ``retry-after``."""
+        delay = backoff_delay(
+            attempt,
+            base=configs.LLM_RETRY_BASE_DELAY_SECONDS,
+            cap=configs.LLM_RETRY_MAX_DELAY_SECONDS,
+        )
+        if isinstance(error, LLMRateLimitError) and error.retry_after:
+            return max(delay, error.retry_after)
+        return delay
 
     async def _attempt(self, adapter: LLMProvider, request: CompletionRequest) -> CompletionResult:
         """One provider call, timed and counted whichever way it ends.
