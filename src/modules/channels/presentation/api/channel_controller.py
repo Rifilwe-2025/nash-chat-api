@@ -7,12 +7,11 @@ from typing import Annotated
 import anyio
 from fastapi import Depends, Path, Query, Request, Response
 
-from src import configs
 from src.core.public_url import public_base_url
 from src.modules.agents.domain.models import Agent
 from src.modules.api_keys.domain.services import ApiKeyService
 from src.modules.channels.domain.models import ChannelConfig, ChannelType, WebhookEndpoint
-from src.modules.channels.domain.services import ChannelService
+from src.modules.channels.domain.services import GUIDE_KEY_PLACEHOLDER, ChannelService
 from src.modules.channels.internal import integration_docs, webhooks
 from src.modules.channels.presentation.dtos.channel import (
     ChannelConfigResponse,
@@ -114,45 +113,29 @@ async def _guide(
     """
     agent = await service.agents.get(agent_id)
 
-    prefix, scopes, rate_limit = (
-        "nsk_live_xxx",
-        ["chat:write", "chat:read"],
-        configs.RATE_LIMIT_DEFAULT_PER_MINUTE,
-    )
+    prefix: str = GUIDE_KEY_PLACEHOLDER
+    scopes: list[str] | None = None
+    rate_limit: int | None = None
     if api_key_id is not None:
         api_key = await ApiKeyService(session, tenant_id).get(api_key_id)
         if api_key.agent_id != agent.id:
             raise NotFoundException("API key does not exist.", code="API_KEY_NOT_FOUND")
-        prefix, scopes, rate_limit = (
-            api_key.prefix,
-            [str(scope) for scope in api_key.scopes],
-            api_key.rate_limit_per_minute,
-        )
+        prefix = api_key.prefix
+        scopes = [str(scope) for scope in api_key.scopes]
+        rate_limit = api_key.rate_limit_per_minute
 
     # `PUBLIC_BASE_URL` where it is set, because behind a proxy the request's own origin is the
     # internal one — and this URL gets copied into somebody's code, or into a PDF that outlives
     # the request entirely.
     base_url = public_base_url(request)
 
-    # The WhatsApp section appears only when a number is actually connected. Read through the
-    # channel service rather than the WhatsApp module's own, because this controller belongs to
-    # `channels` and cross-module access is service to service.
-    whatsapp = await service.configs.for_agent(agent.id, ChannelType.WHATSAPP)
-
-    markdown = integration_docs.build(
-        agent_name=agent.name,
-        agent_id=str(agent.id),
+    _, markdown = await service.integration_guide(
+        agent.id,
         base_url=base_url,
+        schema=request.app.openapi(),
         key_prefix=prefix,
         scopes=scopes,
         rate_limit=rate_limit,
-        signature_header=configs.WEBHOOKS_SIGNATURE_HEADER,
-        schema=request.app.openapi(),
-        allowed_origins=await service.allowed_origins(agent.id),
-        whatsapp_connection_id=str(whatsapp.id) if whatsapp else None,
-        whatsapp_phone_number_id=(
-            str(whatsapp.credentials_json.get("phoneNumberId") or "") if whatsapp else None
-        ),
     )
     return agent, base_url, markdown
 

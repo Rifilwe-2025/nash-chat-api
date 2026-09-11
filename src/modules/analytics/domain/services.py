@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,12 +42,21 @@ from src.modules.analytics.domain.repositories import (
     UsageRepository,
     WebhookHealthRepository,
 )
-from src.modules.analytics.internal.windows import Window, rate
+from src.modules.analytics.internal.windows import Window, rate, resolve
 from src.modules.conversations.domain.models import Message
 from src.modules.conversations.domain.services import ConversationService
 from src.shared.database.pagination import Page, PageRequest
 
 logger = logging.getLogger("api.analytics")
+
+
+def reporting_window(start: datetime | None = None, end: datetime | None = None) -> Window:
+    """A reporting window, defaulted and bounded exactly as the analytics routes bound theirs.
+
+    The seam for callers outside this module: ``internal/`` is private, and a window assembled any
+    other way would skip the cap that keeps a five-year request off the shared request path.
+    """
+    return resolve(start, end)
 
 
 @dataclass(frozen=True, slots=True)
