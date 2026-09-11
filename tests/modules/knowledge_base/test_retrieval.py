@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.agents.domain.services import AgentService
 from src.modules.knowledge_base.domain.models import KnowledgeBase, RetrievalTier
-from src.modules.knowledge_base.domain.repositories import widen_query
+from src.modules.knowledge_base.domain.repositories import _share_of, widen_query
 from src.modules.knowledge_base.domain.services import KnowledgeBaseService
 from src.modules.knowledge_base.internal.retrieval import NoContextReason
 from src.modules.tenants.domain.models import Tenant
@@ -413,3 +413,43 @@ async def test_a_query_that_already_matches_is_not_widened(
 
     assert result.has_context
     assert {passage.citation.source_name for passage in result.passages} == {"Delivery"}
+
+
+# -- a large knowledge base must not starve a small one -------------------------------------
+
+
+def test_share_of_splits_the_budget_and_gives_a_lone_knowledge_base_all_of_it() -> None:
+    assert _share_of(20, 1) == 20
+    assert _share_of(20, 2) == 10
+    assert _share_of(5, 2) == 3, "rounding up, or five slots across two would only return four"
+
+
+async def test_a_big_knowledge_base_does_not_take_every_slot_from_a_small_one(
+    session: AsyncSession, tenant: Tenant, config_override: Callable[..., None]
+) -> None:
+    """``ts_rank_cd`` grows with document length, so a long datasheet that happens to repeat a
+    word outranks a short price list that answers the question exactly. With a flat top-N the
+    long one took every slot and the agent was never shown the answer it needed."""
+    config_override(KB_DIRECT_INJECTION_MAX_CHARS=500, KB_KEYWORD_TOP_N=4, KB_KEYWORD_MIN_RANK=0.0)
+    service = KnowledgeBaseService(session, tenant.id)
+    agent = await AgentService(session, tenant.id).create(name="Sales Assistant")
+
+    datasheets = await service.create(name="Datasheets")
+    for index in range(4):
+        await service.add_manual_source(
+            datasheets.id,
+            title=f"Datasheet {index}",
+            body=" ".join(["Emulsion paint technical data for a prepared wall."] * 200),
+        )
+
+    prices = await service.create(name="Prices")
+    await service.add_manual_source(
+        prices.id, title="Emulsion price", body="Emulsion paint costs twelve dollars for 5L."
+    )
+
+    await service.attach(datasheets.id, agent.id)
+    await service.attach(prices.id, agent.id)
+
+    result = await service.retrieve("emulsion paint", agent_id=agent.id)
+
+    assert prices.id in {passage.citation.kb_id for passage in result.passages}
