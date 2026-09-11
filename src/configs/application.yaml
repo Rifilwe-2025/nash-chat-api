@@ -73,8 +73,13 @@ knowledge_base:
   # larger N buys breadth across them rather than more of whichever corpus has the longest
   # documents. Five left a multi-knowledge-base agent seeing only its biggest one.
   keyword_top_n: "${KB_KEYWORD_TOP_N:20} | int"
-  # Below this ts_rank_cd score a match is noise; retrieval reports "no relevant context" instead.
-  keyword_min_rank: "${KB_KEYWORD_MIN_RANK:0.02} | float"
+  # The cheap "did anything match at all" gate. Kept low: ts_rank_cd scores fall as a question
+  # gets longer, so a high absolute floor silently rejects real answers to conversational
+  # questions. The relative floor below does the real filtering.
+  keyword_min_rank: "${KB_KEYWORD_MIN_RANK:0.0005} | float"
+  # Keep passages scoring at least this fraction of the best row found. Relevance is comparative,
+  # so this adapts to whatever the query happens to score instead of guessing an absolute number.
+  keyword_relative_floor: "${KB_KEYWORD_RELATIVE_FLOOR:0.25} | float"
 
 auth:
   # Override JWT_SECRET_KEY in every deployed environment — the default is for local use only.

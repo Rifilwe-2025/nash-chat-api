@@ -223,6 +223,7 @@ class KnowledgeBaseService:
         return retrieve_keyword(
             matches,
             min_rank=configs.KNOWLEDGE_BASE_KEYWORD_MIN_RANK,
+            relative_floor=configs.KNOWLEDGE_BASE_KEYWORD_RELATIVE_FLOOR,
             considered_characters=decision.considered_characters,
             budget_characters=decision.budget_characters,
         )
