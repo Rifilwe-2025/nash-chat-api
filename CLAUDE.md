@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project state
 
 This directory is the **backend of a two-part project**; the operations console lives in the sibling
-`nashe-chat-webapp` repository. The API is built and serving: 19 domain tables, 19 migrations, and
+`nashe-chat-webapp` repository. The API is built and serving: 19 domain tables, 20 migrations, and
 every phase in `.docs/IMPLEMENTATION_PLAN.md` complete. **`README.md` is the current description of
 what exists** — read it before changing anything.
 

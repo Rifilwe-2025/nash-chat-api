@@ -1,7 +1,8 @@
 """Personal access token shapes.
 
-As with API keys, the issue response is a separate model from the read shape, so it is structurally
-true — not a convention — that :class:`PersonalTokenResponse` has no field a secret could occupy.
+As with API keys, the responses that carry a secret — issuing and copying — are separate models
+from the read shape, so it is structurally true, not a convention, that
+:class:`PersonalTokenResponse` has no field a secret could occupy.
 """
 
 from __future__ import annotations
@@ -41,7 +42,7 @@ class IssuePersonalTokenRequest(CamelModel):
 
 
 class PersonalTokenResponse(CamelModel):
-    """A token as it can be read back. The secret is not here and cannot be recovered."""
+    """A token as it can be read back. The secret is never here — copy it when ``copyable``."""
 
     id: uuid.UUID
     name: str
@@ -59,17 +60,36 @@ class PersonalTokenResponse(CamelModel):
     )
     expires_at: datetime | None = None
     active: bool = Field(description="False once the token is revoked or has expired.")
+    copyable: bool = Field(
+        description=(
+            "Whether `GET /mcp-tokens/{tokenId}/secret` can return this token again. False once it "
+            "is revoked or expired, and for a token issued before copying existed or while the "
+            "server had no encryption key."
+        )
+    )
     created_at: datetime
 
 
 class IssuedPersonalTokenResponse(CamelModel):
-    """**The only response that contains the secret.** Copy it now — it is not stored."""
+    """The new token's secret. ``personalToken.copyable`` says whether it can be copied again."""
 
     token: str = Field(
-        description="The secret. Shown once, never again, and not recoverable.",
+        description=(
+            "The secret. Put it into your coding agent's configuration now — unless "
+            "`personalToken.copyable` is true, this is the only time it is shown."
+        ),
         examples=["nsp_live_Q7xR4mN8pQzT1wV6yU3sA9dK0gH5jLc2bE8fW1nY4tM"],
     )
     personal_token: PersonalTokenResponse
+
+
+class PersonalTokenSecretResponse(CamelModel):
+    """A live token's secret, returned only when its owner explicitly asks to copy it."""
+
+    token: str = Field(
+        description="The secret, exactly as it was issued.",
+        examples=["nsp_live_Q7xR4mN8pQzT1wV6yU3sA9dK0gH5jLc2bE8fW1nY4tM"],
+    )
 
 
 class McpScopeResponse(CamelModel):

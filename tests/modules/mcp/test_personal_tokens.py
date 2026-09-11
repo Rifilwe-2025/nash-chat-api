@@ -1,7 +1,8 @@
 """Personal access tokens: issuing, listing, revoking, and who may see which.
 
 As with API keys, the assertions that matter are about what is *not* returned and what is *not*
-reachable: the secret appears exactly once, and a token is visible only to the person who issued it.
+reachable: the secret never appears in a read, it can be copied again only through an explicit
+request and only from an encrypted copy, and a token is visible only to the person who issued it.
 """
 
 from __future__ import annotations
@@ -13,14 +14,18 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.modules.mcp.domain.services import PersonalAccessTokenService
 from src.modules.mcp.internal.token_generator import generate_token, hash_token
 from src.modules.tenants.domain.models import Tenant, User
 from src.shared.database.pagination import PageRequest
-from src.shared.exceptions import NotFoundException
+from src.shared.exceptions import NotFoundException, UnauthorizedException
 from tests.modules.mcp.helpers import account
+
+# 32 bytes, base64 — the shape `SECURITY_ENCRYPTION_KEY` requires.
+ENCRYPTION_KEY = "bmFzaC10ZXN0LWVuY3J5cHRpb24ta2V5LTMyLWJ5dGU="
 
 
 async def issue(client: AsyncClient, auth: dict[str, str], **payload: Any) -> tuple[int, Any]:
@@ -48,7 +53,7 @@ def test_two_tokens_are_never_the_same() -> None:
 # -- issuing ----------------------------------------------------------------------------
 
 
-async def test_the_secret_is_returned_exactly_once(client: AsyncClient) -> None:
+async def test_the_secret_is_never_in_a_read(client: AsyncClient) -> None:
     auth, _ = await account(client)
 
     status, body = await issue(client, auth)
@@ -120,7 +125,9 @@ async def test_another_accounts_token_is_reported_as_missing(client: AsyncClient
 
     for response in (
         await client.get(f"/mcp-tokens/{token_id}", headers=theirs),
+        await client.get(f"/mcp-tokens/{token_id}/secret", headers=theirs),
         await client.post(f"/mcp-tokens/{token_id}/revoke", headers=theirs),
+        await client.delete(f"/mcp-tokens/{token_id}", headers=theirs),
     ):
         assert response.status_code == 404
         assert response.json()["error"]["code"] == "PERSONAL_TOKEN_NOT_FOUND"
@@ -143,14 +150,20 @@ async def test_tokens_are_personal_within_an_organisation(
 
     assert (await theirs.list_tokens(PageRequest())).total == 0
     with pytest.raises(NotFoundException):
+        await theirs.copy_secret(token.id)
+    with pytest.raises(NotFoundException):
         await theirs.revoke(token.id)
+    with pytest.raises(NotFoundException):
+        await theirs.delete(token.id)
 
 
 async def test_token_management_requires_authentication(client: AsyncClient) -> None:
     assert (await client.get("/mcp-tokens")).status_code == 401
     assert (await client.post("/mcp-tokens", json={"name": "x"})).status_code == 401
     assert (await client.get("/mcp-tokens/connection")).status_code == 401
+    assert (await client.get(f"/mcp-tokens/{uuid.uuid4()}/secret")).status_code == 401
     assert (await client.post(f"/mcp-tokens/{uuid.uuid4()}/revoke")).status_code == 401
+    assert (await client.delete(f"/mcp-tokens/{uuid.uuid4()}")).status_code == 401
 
 
 async def test_connection_details_name_the_endpoint_and_scopes(client: AsyncClient) -> None:
@@ -176,3 +189,112 @@ async def test_the_connection_url_follows_the_public_base_url(
     value = (await client.get("/mcp-tokens/connection", headers=auth)).json()["value"]
 
     assert value["serverUrl"] == "https://api.example.com/mcp"
+
+
+# -- copying ------------------------------------------------------------------------------
+
+
+async def stored_copy(session: AsyncSession, token_id: str) -> str | None:
+    """Raw SQL on purpose: the column must be read as a database dump would see it."""
+    value: str | None = await session.scalar(
+        text("SELECT encrypted_secret FROM personal_access_token WHERE id = :id"), {"id": token_id}
+    )
+    return value
+
+
+async def test_a_token_can_be_copied_again_with_an_encryption_key(
+    client: AsyncClient, config_override: Callable[..., None]
+) -> None:
+    config_override(SECURITY_ENCRYPTION_KEY=ENCRYPTION_KEY)
+    auth, _ = await account(client)
+    _, body = await issue(client, auth)
+    token_id = body["value"]["personalToken"]["id"]
+
+    response = await client.get(f"/mcp-tokens/{token_id}/secret", headers=auth)
+
+    assert body["value"]["personalToken"]["copyable"] is True
+    assert response.status_code == 200
+    assert response.json()["value"]["token"] == body["value"]["token"]
+    assert response.headers["cache-control"] == "no-store"
+    listed = (await client.get("/mcp-tokens", headers=auth)).json()["value"]
+    assert listed[0]["copyable"] is True
+    assert body["value"]["token"] not in str(listed)
+
+
+async def test_the_copy_is_stored_encrypted(
+    client: AsyncClient, session: AsyncSession, config_override: Callable[..., None]
+) -> None:
+    config_override(SECURITY_ENCRYPTION_KEY=ENCRYPTION_KEY)
+    auth, _ = await account(client)
+    _, body = await issue(client, auth)
+
+    raw = await stored_copy(session, body["value"]["personalToken"]["id"])
+
+    assert raw is not None
+    assert raw.startswith("v1:"), "stored as the versioned envelope, not in clear"
+    assert body["value"]["token"] not in raw
+
+
+async def test_without_an_encryption_key_no_copy_is_kept(
+    client: AsyncClient, session: AsyncSession, config_override: Callable[..., None]
+) -> None:
+    """Storing the secret in clear would undo the hash, so without a key nothing is stored."""
+    config_override(SECURITY_ENCRYPTION_KEY="")
+    auth, _ = await account(client)
+    _, body = await issue(client, auth)
+    token_id = body["value"]["personalToken"]["id"]
+
+    response = await client.get(f"/mcp-tokens/{token_id}/secret", headers=auth)
+
+    assert body["value"]["personalToken"]["copyable"] is False
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "PERSONAL_TOKEN_NOT_COPYABLE"
+    assert await stored_copy(session, token_id) is None
+
+
+async def test_revoking_discards_the_copy(
+    client: AsyncClient, session: AsyncSession, config_override: Callable[..., None]
+) -> None:
+    config_override(SECURITY_ENCRYPTION_KEY=ENCRYPTION_KEY)
+    auth, _ = await account(client)
+    _, body = await issue(client, auth)
+    token_id = body["value"]["personalToken"]["id"]
+
+    revoked = await client.post(f"/mcp-tokens/{token_id}/revoke", headers=auth)
+    response = await client.get(f"/mcp-tokens/{token_id}/secret", headers=auth)
+
+    assert revoked.json()["value"]["copyable"] is False
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "PERSONAL_TOKEN_NOT_COPYABLE"
+    assert await stored_copy(session, token_id) is None
+
+
+# -- deleting -----------------------------------------------------------------------------
+
+
+async def test_deleting_removes_the_token_and_it_is_refused(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    auth, _ = await account(client)
+    _, body = await issue(client, auth)
+    token_id = body["value"]["personalToken"]["id"]
+
+    response = await client.delete(f"/mcp-tokens/{token_id}", headers=auth)
+
+    assert response.status_code == 200
+    assert (await client.get(f"/mcp-tokens/{token_id}", headers=auth)).status_code == 404
+    assert (await client.get("/mcp-tokens", headers=auth)).json()["meta"]["totalItems"] == 0
+    with pytest.raises(UnauthorizedException):
+        await PersonalAccessTokenService.authenticate(session, body["value"]["token"])
+
+
+async def test_a_revoked_token_can_still_be_deleted(client: AsyncClient) -> None:
+    auth, _ = await account(client)
+    _, body = await issue(client, auth)
+    token_id = body["value"]["personalToken"]["id"]
+    await client.post(f"/mcp-tokens/{token_id}/revoke", headers=auth)
+
+    response = await client.delete(f"/mcp-tokens/{token_id}", headers=auth)
+
+    assert response.status_code == 200
+    assert (await client.get("/mcp-tokens", headers=auth)).json()["meta"]["totalItems"] == 0

@@ -3,9 +3,9 @@
 Two audiences, kept apart the way the API key service keeps its two apart:
 
 * **Token management** is what a signed-in user does from the console: issue a token for their own
-  coding agent, list their tokens, revoke one. It is scoped to the user as well as the tenant — a
-  token is a personal credential, and one member of an organisation has no business listing or
-  revoking another's.
+  coding agent, list their tokens, and copy, revoke or delete one. It is scoped to the user as well
+  as the tenant — a token is a personal credential, and one member of an organisation has no
+  business listing, copying or revoking another's.
 * **:meth:`PersonalAccessTokenService.authenticate`** is what the MCP endpoint calls before any
   tenant is known. It is a classmethod taking a bare session so it can never be confused with a
   scoped read.
@@ -37,8 +37,10 @@ from src.modules.mcp.domain.repositories import PersonalAccessTokenRepository, a
 from src.modules.mcp.internal.token_generator import GeneratedToken, generate_token, hash_token
 from src.modules.tenants.domain.services import TenantService
 from src.modules.tools.domain.services import ResponseCache, ToolService
+from src.shared.crypto import open_copy, seal_copy
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import (
+    ConflictException,
     ForbiddenException,
     NotFoundException,
     UnauthorizedException,
@@ -98,7 +100,11 @@ class PersonalAccessTokenService:
         scopes: list[str] | None = None,
         expires_at: datetime | None = None,
     ) -> tuple[PersonalAccessToken, GeneratedToken]:
-        """Create a token and return the secret **once** — it is not stored anywhere."""
+        """Create a token and return its secret.
+
+        Authentication only ever uses the hash. An encrypted copy is kept as well when the server
+        has an encryption key, so the owner can copy the token again later.
+        """
         if expires_at is not None and expires_at <= datetime.now(UTC):
             raise ValidationException(
                 "The expiry must be in the future.", code="PERSONAL_TOKEN_EXPIRY_IN_PAST"
@@ -111,6 +117,7 @@ class PersonalAccessTokenService:
                 name=name.strip(),
                 token_hash=generated.token_hash,
                 prefix=generated.prefix,
+                encrypted_secret=seal_copy(generated.secret),
                 scopes=_normalised_scopes(scopes),
                 expires_at=expires_at,
             )
@@ -118,13 +125,46 @@ class PersonalAccessTokenService:
         logger.info("personal access token %s issued for user %s", token.id, self.user_id)
         return token, generated
 
+    async def copy_secret(self, token_id: uuid.UUID) -> str:
+        """The secret of one of the caller's own live tokens, to paste into a coding agent again."""
+        token = await self.get(token_id)
+        if not token.is_active:
+            raise ConflictException(
+                message="A revoked or expired token cannot be copied — it would not work anywhere.",
+                code="PERSONAL_TOKEN_NOT_COPYABLE",
+            )
+        if token.encrypted_secret is None:
+            raise ConflictException(
+                message=(
+                    "This token cannot be copied: it was issued before copying was available, or "
+                    "while the server had no encryption key. Issue a new token to get one you can "
+                    "copy."
+                ),
+                code="PERSONAL_TOKEN_NOT_COPYABLE",
+            )
+        logger.info("personal access token %s copied", token.id)
+        return open_copy(token.encrypted_secret)
+
     async def revoke(self, token_id: uuid.UUID) -> PersonalAccessToken:
-        """Kill a token. Refused from its next request — nothing caches the decision."""
+        """Kill a token. Refused from its next request — nothing caches the decision.
+
+        The stored copy goes with it: a revoked token is never worth copying again.
+        """
         token = await self.get(token_id)
         if token.revoked_at is not None:
             return token
         logger.info("personal access token %s revoked", token.id)
-        return await self.tokens.update(token, revoked_at=datetime.now(UTC))
+        return await self.tokens.update(token, revoked_at=datetime.now(UTC), encrypted_secret=None)
+
+    async def delete(self, token_id: uuid.UUID) -> None:
+        """Remove a token and its record. Refused from its next request, like a revoked one.
+
+        An unknown hash and a revoked token already read identically to a caller, so deleting
+        changes nothing about what a coding agent holding the old secret sees.
+        """
+        token = await self.get(token_id)
+        logger.info("personal access token %s deleted", token.id)
+        await self.tokens.delete(token)
 
     # -- authentication ------------------------------------------------------
 

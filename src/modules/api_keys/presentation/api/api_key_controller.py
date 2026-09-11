@@ -3,13 +3,14 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import Depends, Path, Query
+from fastapi import Depends, Path, Query, Response
 
 from src.modules.api_keys.domain.models import ApiKey
 from src.modules.api_keys.domain.services import ApiKeyService
 from src.modules.api_keys.internal.key_generator import GeneratedKey
 from src.modules.api_keys.presentation.dtos.api_key import (
     ApiKeyResponse,
+    ApiKeySecretResponse,
     IssueApiKeyRequest,
     IssuedApiKeyResponse,
     UpdateApiKeyRequest,
@@ -53,6 +54,7 @@ def _api_key(api_key: ApiKey) -> ApiKeyResponse:
         revoked_at=api_key.revoked_at,
         expires_at=api_key.expires_at,
         active=api_key.is_active,
+        copyable=api_key.is_copyable,
         created_at=api_key.created_at,
     )
 
@@ -63,9 +65,11 @@ def _api_key(api_key: ApiKey) -> ApiKeyResponse:
     status_code=201,
     summary="Issue an API key",
     description=(
-        "Creates a key for one of your agents and **returns the secret once**. It is stored only "
-        "as a hash, so this response is the only time it exists anywhere — copy it now. If it is "
-        "lost, issue a new key and revoke this one; nobody, including us, can recover it.\n\n"
+        "Creates a key for one of your agents and returns the secret. Authentication uses only a "
+        "hash of it. When the server has an encryption key (`SECURITY_ENCRYPTION_KEY`), an "
+        "encrypted copy is kept as well, so the key can be copied again later — `apiKey.copyable` "
+        "says which. Without one, this response is the only time the key exists anywhere: if it "
+        "is lost, issue a new key and delete this one.\n\n"
         "Give a key only the scopes it needs. A website widget that sends messages does not need "
         "`chat:read`, and a reporting job should never hold `chat:write`.\n\n"
         "The key works as soon as the agent is published, and stops the moment it is revoked."
@@ -99,7 +103,11 @@ async def issue_key(
     )
     return ApiResponse.ok(
         _issued(api_key, generated),
-        message="Store this key now — it will not be shown again.",
+        message=(
+            "Key issued. You can copy it again from the key list."
+            if api_key.is_copyable
+            else "Store this key now — it will not be shown again."
+        ),
     )
 
 
@@ -113,7 +121,8 @@ def _issued(api_key: ApiKey, generated: GeneratedKey) -> IssuedApiKeyResponse:
     summary="List API keys",
     description=(
         "Lists your keys, newest first, with their scopes, limits and last use. Secrets are never "
-        "returned — `prefix` is what identifies a key in this list. Filter by `agentId` to see one "
+        "returned here — `prefix` is what identifies a key in this list, and `copyable` says "
+        "whether `GET /api-keys/{key_id}/secret` can return it. Filter by `agentId` to see one "
         "agent's keys."
     ),
     responses={
@@ -143,12 +152,43 @@ async def list_keys(
     response_model=ApiResponse[ApiKeyResponse],
     summary="Get an API key",
     description=(
-        "Returns one key's configuration. The secret is not included and cannot be re-read."
+        "Returns one key's configuration. The secret is not included — copy it with "
+        "`GET /api-keys/{key_id}/secret`."
     ),
     responses={200: {"description": "The key."}, 401: UNAUTHORIZED, 404: NOT_FOUND},
 )
 async def get_key(key_id: KeyIdPath, service: ServiceDep) -> ApiResponse[ApiKeyResponse]:
     return ApiResponse.ok(_api_key(await service.get(key_id)))
+
+
+@router.get(
+    "/{key_id}/secret",
+    response_model=ApiResponse[ApiKeySecretResponse],
+    summary="Copy an API key",
+    description=(
+        "Returns a live key's secret, so it can be put into an integration again. The response is "
+        "sent with `Cache-Control: no-store`.\n\n"
+        "Only a key whose `copyable` is true can be copied. A revoked or expired key cannot, and "
+        "neither can one issued before copying was available or while the server had no "
+        "encryption key — issue a new key instead."
+    ),
+    responses={
+        200: {"description": "The key's secret, in `value.key`."},
+        401: UNAUTHORIZED,
+        404: NOT_FOUND,
+        409: {
+            "description": (
+                "The key is revoked or expired, or no copy of it was kept (`API_KEY_NOT_COPYABLE`)."
+            )
+        },
+    },
+)
+async def copy_key(
+    key_id: KeyIdPath, service: ServiceDep, response: Response
+) -> ApiResponse[ApiKeySecretResponse]:
+    secret = await service.copy_secret(key_id)
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse.ok(ApiKeySecretResponse(key=secret))
 
 
 @router.patch(
@@ -191,7 +231,8 @@ async def update_key(
         "Kills the key. It is refused from the **next request onward** — nothing caches the "
         "decision, so there is no window in which a revoked key still works.\n\n"
         "The row is kept rather than deleted so the key stays visible in your list as revoked, and "
-        "so its past use remains attributable. Revoking twice is a no-op."
+        "so its past use remains attributable. Its stored copy is discarded, so it can no longer "
+        "be copied. Revoking twice is a no-op."
     ),
     responses={
         200: {"description": "The key is revoked."},
@@ -201,3 +242,19 @@ async def update_key(
 )
 async def revoke_key(key_id: KeyIdPath, service: ServiceDep) -> ApiResponse[ApiKeyResponse]:
     return ApiResponse.ok(_api_key(await service.revoke(key_id)), message="API key revoked.")
+
+
+@router.delete(
+    "/{key_id}",
+    response_model=ApiResponse[None],
+    summary="Delete an API key",
+    description=(
+        "Removes the key and its record permanently. An integration still using it is refused "
+        "from its **next request**, exactly as if it had been revoked.\n\n"
+        "Revoke instead to keep the key in your list, so its past use stays attributable."
+    ),
+    responses={200: {"description": "The key was deleted."}, 401: UNAUTHORIZED, 404: NOT_FOUND},
+)
+async def delete_key(key_id: KeyIdPath, service: ServiceDep) -> ApiResponse[None]:
+    await service.delete(key_id)
+    return ApiResponse.ok(message="API key deleted.")
