@@ -30,6 +30,19 @@ _OPERATORS = frozenset({"or", "and", "not"})
 _MAX_WIDENED_TERMS = 24
 
 
+def _share_of(limit: int, knowledge_bases: int) -> int:
+    """How many passages one knowledge base may contribute.
+
+    An even split, rounded up, so nothing is starved and a single knowledge base still gets the
+    whole budget when it is the only one attached. Rounding up matters at small limits: five
+    slots across two knowledge bases is three and three, not two and two, because the caller
+    asked for five and truncating would hand back four.
+    """
+    if knowledge_bases <= 1:
+        return limit
+    return -(-limit // knowledge_bases)
+
+
 def widen_query(query_text: str) -> str | None:
     """Rewrite a question as an OR of its terms, or ``None`` if that would change nothing.
 
@@ -206,15 +219,37 @@ class KbSourceRepository(TenantScopedRepository[KbSource]):
             'FragmentDelimiter=" … "',
         ).label("headline")
 
-        statement = (
-            select(KbSource, rank, headline)
+        # Rank within each knowledge base before taking the overall best, so a large body of
+        # knowledge cannot starve a small one. ``ts_rank_cd`` accumulates with document length:
+        # a long datasheet that mentions a word fifty times outscores a short price list that
+        # answers the question exactly, and with a flat limit it takes every slot. An agent's
+        # answer "should be able to come from any of them" (see ``retrieve``), which a global
+        # top-N quietly stops being true the moment one knowledge base is much bigger.
+        per_kb_rank = func.row_number().over(
+            partition_by=KbSource.kb_id,
+            order_by=(rank.desc(), KbSource.created_at),
+        )
+        ranked = (
+            select(
+                KbSource.id.label("source_id"),
+                rank,
+                headline,
+                per_kb_rank.label("rank_within_kb"),
+            )
             .where(
                 KbSource.tenant_id == self.tenant_id,
                 KbSource.kb_id.in_(kb_ids),
                 KbSource.status == SourceStatus.READY,
                 KbSource.search_vector.op("@@")(tsquery),
             )
-            .order_by(rank.desc(), KbSource.created_at)
+            .subquery()
+        )
+
+        statement = (
+            select(KbSource, ranked.c.rank, ranked.c.headline)
+            .join(ranked, KbSource.id == ranked.c.source_id)
+            .where(ranked.c.rank_within_kb <= _share_of(limit, len(kb_ids)))
+            .order_by(ranked.c.rank.desc(), KbSource.created_at)
             .limit(limit)
         )
 
