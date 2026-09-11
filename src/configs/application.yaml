@@ -69,7 +69,10 @@ knowledge_base:
   # tokens of it on knowledge every turn.
   direct_injection_max_chars: "${KB_DIRECT_INJECTION_MAX_CHARS:48000} | int"
   context_budget_fraction: "${KB_CONTEXT_BUDGET_FRACTION:0.25} | float"
-  keyword_top_n: "${KB_KEYWORD_TOP_N:5} | int"
+  # Passages are now shared out evenly between the knowledge bases an agent has attached, so a
+  # larger N buys breadth across them rather than more of whichever corpus has the longest
+  # documents. Five left a multi-knowledge-base agent seeing only its biggest one.
+  keyword_top_n: "${KB_KEYWORD_TOP_N:20} | int"
   # Below this ts_rank_cd score a match is noise; retrieval reports "no relevant context" instead.
   keyword_min_rank: "${KB_KEYWORD_MIN_RANK:0.02} | float"
 
