@@ -32,6 +32,7 @@ The tick goes in the phase's own final commit (`docs(plan): …`), so it lands w
 - [x] ~~**Phase 14** *(v1.1)* — Plan limits & usage metering~~ · **reverted** — the platform does not charge for use; accounts are enabled and disabled instead
 - [x] **Phase 15** — Platform administration & account status · `feat/platform-admin`
 - [x] **Phase 16** — MCP server for coding agents · `feat/mcp-server`
+- [x] **Phase 17** — Copy and delete issued credentials · `feat/copy-and-delete-credentials`
 
 ---
 
@@ -608,6 +609,33 @@ WhatsApp credentials, agent API key secrets), and platform-admin impersonation o
 integrate an agent end to end; a read-only token cannot change anything; a token sees only its own
 tenant; revoking a token, disabling the account or exceeding the rate limit refuses the next request;
 and signing in again does not revoke a token.
+
+---
+
+## Phase 17 — Copy and delete issued credentials
+
+- [x] **Complete** · **Branch:** `feat/copy-and-delete-credentials`
+**Depends on:** Phase 16
+
+**Delivers**
+- `encrypted_secret` on `api_key` and `personal_access_token` (migration 0020): an AES-256-GCM copy
+  of each newly issued secret, written only when `SECURITY_ENCRYPTION_KEY` is set and cleared on
+  revoke. Authentication still uses only the hash. `src/shared/crypto/copies.py` refuses to store a
+  copy without a key, because a copy in clear would undo the hash.
+- `GET /api-keys/{key_id}/secret` and `GET /mcp-tokens/{token_id}/secret` return a live credential's
+  secret with `Cache-Control: no-store`, or `API_KEY_NOT_COPYABLE` / `PERSONAL_TOKEN_NOT_COPYABLE`.
+  Both read shapes gain `copyable`.
+- `DELETE /api-keys/{key_id}` and `DELETE /mcp-tokens/{token_id}` remove a credential and its record.
+  It is refused from the next request, as a revoked one is.
+
+**Not in this phase:** copying credentials issued before migration 0020 (only their hash exists),
+copying over MCP, and an owner-only check for API keys on the server (the console gates the
+controls, as it already does for issuing and revoking).
+
+**Done when:** with an encryption key a live key or token can be copied, and the stored copy is an
+envelope rather than the secret; without a key no copy is stored and copying is refused; revoking
+discards the copy; deleting removes the row and the secret stops authenticating; and another
+tenant's or user's credential reads as missing on both routes.
 
 ---
 

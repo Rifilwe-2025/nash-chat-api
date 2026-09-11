@@ -8,6 +8,7 @@ from src.shared.crypto.cipher import (
     generate_key,
     warn_if_unprotected,
 )
+from src.shared.crypto.copies import open_copy, seal_copy
 from src.shared.crypto.types import EncryptedJson, EncryptedString
 
 __all__ = [
@@ -18,5 +19,7 @@ __all__ = [
     "encrypt",
     "encryption_enabled",
     "generate_key",
+    "open_copy",
+    "seal_copy",
     "warn_if_unprotected",
 ]

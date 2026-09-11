@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import Depends, Path, Request
+from fastapi import Depends, Path, Request, Response
 
 from src import configs
 from src.core.public_url import public_base_url
@@ -15,6 +15,7 @@ from src.modules.mcp.presentation.dtos.token import (
     McpConnectionResponse,
     McpScopeResponse,
     PersonalTokenResponse,
+    PersonalTokenSecretResponse,
 )
 from src.modules.mcp.presentation.mcp import MCP_PATH
 from src.modules.tenants.presentation.dependencies import CurrentUserDep
@@ -73,6 +74,7 @@ def _token(token: PersonalAccessToken) -> PersonalTokenResponse:
         revoked_at=token.revoked_at,
         expires_at=token.expires_at,
         active=token.is_active,
+        copyable=token.is_copyable,
         created_at=token.created_at,
     )
 
@@ -114,10 +116,11 @@ async def get_connection(request: Request, _: CurrentUserDep) -> ApiResponse[Mcp
     status_code=201,
     summary="Issue a personal access token",
     description=(
-        "Creates a token for **your own** coding agent to reach the MCP endpoint, and **returns "
-        "the secret once**. Only a hash is stored, so this response is the only time the token "
-        "exists anywhere — copy it into your agent's configuration now. If it is lost, issue a new "
-        "one and revoke this one.\n\n"
+        "Creates a token for **your own** coding agent to reach the MCP endpoint, and returns the "
+        "secret. Authentication uses only a hash of it. When the server has an encryption key "
+        "(`SECURITY_ENCRYPTION_KEY`), an encrypted copy is kept as well, so you can copy the token "
+        "again later — `personalToken.copyable` says which. Without one, this response is the only "
+        "time the token exists anywhere: if it is lost, issue a new one and delete this one.\n\n"
         "The token acts as you, inside your own organisation, with the scopes you give it: "
         "`mcp:read` (the default) to inspect, `mcp:write` to create and change. Platform "
         "administrators acting as another tenant through `X-Tenant-Id` still receive a token for "
@@ -144,7 +147,11 @@ async def issue_token(
     )
     return ApiResponse.ok(
         IssuedPersonalTokenResponse(token=generated.secret, personal_token=_token(token)),
-        message="Store this token now — it will not be shown again.",
+        message=(
+            "Token issued. You can copy it again from your token list."
+            if token.is_copyable
+            else "Store this token now — it will not be shown again."
+        ),
     )
 
 
@@ -155,7 +162,8 @@ async def issue_token(
     description=(
         "Lists the tokens **you** have issued, newest first, with their scopes, expiry and when a "
         "coding agent last used each one. Other members' tokens are never listed. Secrets are "
-        "never returned — `prefix` identifies a token in this list."
+        "never returned here — `prefix` identifies a token in this list, and `copyable` says "
+        "whether `GET /mcp-tokens/{token_id}/secret` can return it."
     ),
     responses={200: {"description": "A page of your tokens."}, 401: UNAUTHORIZED},
 )
@@ -175,13 +183,47 @@ async def list_tokens(
     "/{token_id}",
     response_model=ApiResponse[PersonalTokenResponse],
     summary="Get a personal access token",
-    description="Returns one of your tokens. The secret is not included and cannot be re-read.",
+    description=(
+        "Returns one of your tokens. The secret is not included — copy it with "
+        "`GET /mcp-tokens/{token_id}/secret`."
+    ),
     responses={200: {"description": "The token."}, 401: UNAUTHORIZED, 404: NOT_FOUND},
 )
 async def get_token(
     token_id: TokenIdPath, service: ServiceDep
 ) -> ApiResponse[PersonalTokenResponse]:
     return ApiResponse.ok(_token(await service.get(token_id)))
+
+
+@router.get(
+    "/{token_id}/secret",
+    response_model=ApiResponse[PersonalTokenSecretResponse],
+    summary="Copy a personal access token",
+    description=(
+        "Returns the secret of one of **your own** live tokens, so you can put it into a coding "
+        "agent's configuration again. The response is sent with `Cache-Control: no-store`.\n\n"
+        "Only a token whose `copyable` is true can be copied. A revoked or expired token cannot, "
+        "and neither can one issued before copying was available or while the server had no "
+        "encryption key — issue a new token instead."
+    ),
+    responses={
+        200: {"description": "The token's secret, in `value.token`."},
+        401: UNAUTHORIZED,
+        404: NOT_FOUND,
+        409: {
+            "description": (
+                "The token is revoked or expired, or no copy of it was kept "
+                "(`PERSONAL_TOKEN_NOT_COPYABLE`)."
+            )
+        },
+    },
+)
+async def copy_token(
+    token_id: TokenIdPath, service: ServiceDep, response: Response
+) -> ApiResponse[PersonalTokenSecretResponse]:
+    secret = await service.copy_secret(token_id)
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse.ok(PersonalTokenSecretResponse(token=secret))
 
 
 @router.post(
@@ -192,7 +234,7 @@ async def get_token(
         "Kills the token. The coding agent using it is refused from its **next request** — nothing "
         "caches the decision.\n\n"
         "The row is kept rather than deleted, so the token stays visible in your list as revoked. "
-        "Revoking twice is a no-op."
+        "Its stored copy is discarded, so it can no longer be copied. Revoking twice is a no-op."
     ),
     responses={200: {"description": "The token is revoked."}, 401: UNAUTHORIZED, 404: NOT_FOUND},
 )
@@ -202,3 +244,19 @@ async def revoke_token(
     return ApiResponse.ok(
         _token(await service.revoke(token_id)), message="Personal access token revoked."
     )
+
+
+@router.delete(
+    "/{token_id}",
+    response_model=ApiResponse[None],
+    summary="Delete a personal access token",
+    description=(
+        "Removes the token and its record permanently. A coding agent still using it is refused "
+        "from its **next request**, exactly as if it had been revoked.\n\n"
+        "Revoke instead if you want the token to stay in your list as a record of what existed."
+    ),
+    responses={200: {"description": "The token was deleted."}, 401: UNAUTHORIZED, 404: NOT_FOUND},
+)
+async def delete_token(token_id: TokenIdPath, service: ServiceDep) -> ApiResponse[None]:
+    await service.delete(token_id)
+    return ApiResponse.ok(message="Personal access token deleted.")

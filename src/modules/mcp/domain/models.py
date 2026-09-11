@@ -9,11 +9,14 @@ A third credential beside the two the API already has, and deliberately unlike e
   and configures agents needs the builder's reach, not a website widget's.
 
 A personal access token speaks for **a user, inside that user's own tenant**, with the scopes
-and the lifetime the user chose when issuing it. It is stored the way the other two are — only a
-SHA-256 hash, the secret shown exactly once — and it lives in a table of its own so that nothing
-that ends a browser session (a sign-in, a refresh, a logout) can reach it by accident. Revoking
-one is a column rather than a delete, so a revoked token stays visible in the owner's list and
-its use stays attributable.
+and the lifetime the user chose when issuing it. It is authenticated the way the other two are — by
+a SHA-256 hash — and it lives in a table of its own so that nothing that ends a browser session (a
+sign-in, a refresh, a logout) can reach it by accident. Revoking one is a column rather than a
+delete, so a revoked token stays visible in the owner's list and its use stays attributable;
+deleting one is the owner's explicit choice to drop that record as well.
+
+``encrypted_secret`` is what lets the owner copy a token again later, and it is optional by design —
+see :mod:`src.shared.crypto.copies`.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Uuid
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, Uuid
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -65,6 +68,9 @@ class PersonalAccessToken(TenantScopedModel):
     # The opening characters, in clear, so two tokens can be told apart in a list without either
     # being recoverable.
     prefix: Mapped[str] = mapped_column(String(24), nullable=False)
+    # The secret under AES-256-GCM, for the owner to copy again. Null when no encryption key was
+    # configured at issue, and cleared on revoke. Authentication never reads it.
+    encrypted_secret: Mapped[str | None] = mapped_column(Text, nullable=True)
     scopes: Mapped[list[Any]] = mapped_column(JSONB, nullable=False, default=list)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -77,6 +83,11 @@ class PersonalAccessToken(TenantScopedModel):
     @property
     def is_active(self) -> bool:
         return self.revoked_at is None and not self.is_expired
+
+    @property
+    def is_copyable(self) -> bool:
+        """A copy was kept, and the token would still work if it were pasted somewhere."""
+        return self.encrypted_secret is not None and self.is_active
 
     def allows(self, scope: McpScope) -> bool:
         granted = {str(value) for value in (self.scopes or [])}

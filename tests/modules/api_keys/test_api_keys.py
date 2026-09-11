@@ -1,8 +1,8 @@
 """API key issue, scope, revocation and rate limiting (spec §5.6).
 
 The security-relevant assertions are the ones about what is *not* returned and what is *not*
-distinguishable: the secret appears exactly once, and every authentication failure looks the same
-from outside.
+distinguishable: the secret never appears in a read and is copied again only from an encrypted
+copy, and every authentication failure looks the same from outside.
 """
 
 from __future__ import annotations
@@ -14,10 +14,17 @@ from typing import Any
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.core.rate_limit import InMemoryBackend, RateLimiter
+from src.modules.api_keys.domain.services import ApiKeyService
 from src.modules.api_keys.internal.key_generator import generate_key, hash_key
+from src.shared.exceptions import UnauthorizedException
 from tests.modules.auth.test_auth_flow import auth_header, signup
+
+# 32 bytes, base64 — the shape `SECURITY_ENCRYPTION_KEY` requires.
+ENCRYPTION_KEY = "bmFzaC10ZXN0LWVuY3J5cHRpb24ta2V5LTMyLWJ5dGU="
 
 PUBLISHABLE: dict[str, Any] = {
     "persona": "You are the sales assistant for Nash Paints.",
@@ -78,7 +85,7 @@ def test_two_keys_are_never_the_same() -> None:
 # -- issuing ----------------------------------------------------------------------------
 
 
-async def test_the_secret_is_returned_exactly_once(client: AsyncClient) -> None:
+async def test_the_secret_is_never_in_a_read(client: AsyncClient) -> None:
     auth = await headers(client)
     agent = await published_agent(client, auth)
 
@@ -205,6 +212,93 @@ async def test_revoking_twice_is_a_no_op(client: AsyncClient) -> None:
     assert first.json()["value"]["revokedAt"] == second.json()["value"]["revokedAt"]
 
 
+# -- copying ----------------------------------------------------------------------------------
+
+
+async def stored_copy(session: AsyncSession, key_id: str) -> str | None:
+    """Raw SQL on purpose: the column must be read as a database dump would see it."""
+    value: str | None = await session.scalar(
+        text("SELECT encrypted_secret FROM api_key WHERE id = :id"), {"id": key_id}
+    )
+    return value
+
+
+async def test_a_key_can_be_copied_again_with_an_encryption_key(
+    client: AsyncClient, session: AsyncSession, config_override: Callable[..., None]
+) -> None:
+    config_override(SECURITY_ENCRYPTION_KEY=ENCRYPTION_KEY)
+    auth = await headers(client)
+    agent = await published_agent(client, auth)
+    _, issued = await issue(client, auth, agent["id"])
+    key_id = issued["value"]["apiKey"]["id"]
+
+    response = await client.get(f"/api-keys/{key_id}/secret", headers=auth)
+
+    assert issued["value"]["apiKey"]["copyable"] is True
+    assert response.status_code == 200
+    assert response.json()["value"]["key"] == issued["value"]["key"]
+    assert response.headers["cache-control"] == "no-store"
+    raw = await stored_copy(session, key_id)
+    assert raw is not None
+    assert raw.startswith("v1:"), "stored as the versioned envelope, not in clear"
+    assert issued["value"]["key"] not in raw
+
+
+async def test_without_an_encryption_key_a_key_is_not_copyable(
+    client: AsyncClient, session: AsyncSession, config_override: Callable[..., None]
+) -> None:
+    config_override(SECURITY_ENCRYPTION_KEY="")
+    auth = await headers(client)
+    agent = await published_agent(client, auth)
+    _, issued = await issue(client, auth, agent["id"])
+    key_id = issued["value"]["apiKey"]["id"]
+
+    response = await client.get(f"/api-keys/{key_id}/secret", headers=auth)
+
+    assert issued["value"]["apiKey"]["copyable"] is False
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "API_KEY_NOT_COPYABLE"
+    assert await stored_copy(session, key_id) is None
+
+
+async def test_revoking_a_key_discards_its_copy(
+    client: AsyncClient, session: AsyncSession, config_override: Callable[..., None]
+) -> None:
+    config_override(SECURITY_ENCRYPTION_KEY=ENCRYPTION_KEY)
+    auth = await headers(client)
+    agent = await published_agent(client, auth)
+    _, issued = await issue(client, auth, agent["id"])
+    key_id = issued["value"]["apiKey"]["id"]
+
+    revoked = await client.post(f"/api-keys/{key_id}/revoke", headers=auth)
+    response = await client.get(f"/api-keys/{key_id}/secret", headers=auth)
+
+    assert revoked.json()["value"]["copyable"] is False
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "API_KEY_NOT_COPYABLE"
+    assert await stored_copy(session, key_id) is None
+
+
+# -- deleting ---------------------------------------------------------------------------------
+
+
+async def test_deleting_a_key_removes_it_and_it_is_refused(
+    client: AsyncClient, session: AsyncSession
+) -> None:
+    auth = await headers(client)
+    agent = await published_agent(client, auth)
+    _, issued = await issue(client, auth, agent["id"])
+    key_id = issued["value"]["apiKey"]["id"]
+
+    response = await client.delete(f"/api-keys/{key_id}", headers=auth)
+
+    assert response.status_code == 200
+    assert (await client.get(f"/api-keys/{key_id}", headers=auth)).status_code == 404
+    assert (await client.get("/api-keys", headers=auth)).json()["meta"]["totalItems"] == 0
+    with pytest.raises(UnauthorizedException):
+        await ApiKeyService.authenticate(session, issued["value"]["key"])
+
+
 # -- isolation -----------------------------------------------------------------------------
 
 
@@ -217,8 +311,10 @@ async def test_another_tenants_key_is_reported_as_missing(client: AsyncClient) -
 
     for method, suffix, payload in (
         ("get", "", None),
+        ("get", "/secret", None),
         ("patch", "", {"name": "hijacked"}),
         ("post", "/revoke", None),
+        ("delete", "", None),
     ):
         kwargs: dict[str, Any] = {"headers": second}
         if payload is not None:
@@ -241,6 +337,8 @@ async def test_a_key_cannot_be_issued_for_another_tenants_agent(client: AsyncCli
 
 async def test_key_management_requires_authentication(client: AsyncClient) -> None:
     assert (await client.get("/api-keys")).status_code == 401
+    assert (await client.get(f"/api-keys/{uuid.uuid4()}/secret")).status_code == 401
+    assert (await client.delete(f"/api-keys/{uuid.uuid4()}")).status_code == 401
     assert (
         await client.post(f"/api-keys?agentId={uuid.uuid4()}", json={"name": "x"})
     ).status_code == 401

@@ -9,8 +9,9 @@ Two audiences use this service and they are kept apart on purpose:
   never be confused with a scoped read.
 
 A revoked key is rejected on the very next request: authentication reads the row every time rather
-than caching a decision. That is the phase's bar, and it is why revocation is a column rather than
-a delete — the row must still be there to say "no".
+than caching a decision. Revocation is a column so the key stays in the tenant's list as revoked; a
+tenant who would rather drop the record deletes the key instead, and it is refused just the same —
+an unknown hash reads exactly like a revoked key.
 """
 
 from __future__ import annotations
@@ -28,8 +29,10 @@ from src.modules.api_keys.domain.models import DEFAULT_SCOPES, ApiKey, ApiKeySco
 from src.modules.api_keys.domain.repositories import ApiKeyRepository, authenticate
 from src.modules.api_keys.internal.key_generator import GeneratedKey, generate_key, hash_key
 from src.modules.tenants.domain.services import TenantService
+from src.shared.crypto import open_copy, seal_copy
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.exceptions import (
+    ConflictException,
     ForbiddenException,
     NotFoundException,
     UnauthorizedException,
@@ -77,10 +80,11 @@ class ApiKeyService:
         rate_limit_per_minute: int | None = None,
         expires_at: datetime | None = None,
     ) -> tuple[ApiKey, GeneratedKey]:
-        """Create a key and return the secret **once**.
+        """Create a key and return its secret.
 
-        The caller must hand the secret straight to the user: it is not stored, so this return
-        value is the only time it exists anywhere.
+        Authentication only ever uses the hash. An encrypted copy is kept as well when the server
+        has an encryption key, so the tenant can copy the key again later; without one, this return
+        value is the only time the secret exists anywhere.
         """
         agent = await self.agents.get(agent_id)
         selected = self._validate_scopes(scopes)
@@ -98,6 +102,7 @@ class ApiKeyService:
                 name=name,
                 key_hash=generated.key_hash,
                 prefix=generated.prefix,
+                encrypted_secret=seal_copy(generated.secret),
                 scopes=selected,
                 rate_limit_per_minute=limit,
                 expires_at=expires_at,
@@ -128,13 +133,42 @@ class ApiKeyService:
             return api_key
         return await self.keys.update(api_key, **changes)
 
+    async def copy_secret(self, key_id: uuid.UUID) -> str:
+        """A live key's secret, to paste into an integration again."""
+        api_key = await self.get(key_id)
+        if not api_key.is_active:
+            raise ConflictException(
+                message="A revoked or expired key cannot be copied — it would not work anywhere.",
+                code="API_KEY_NOT_COPYABLE",
+            )
+        if api_key.encrypted_secret is None:
+            raise ConflictException(
+                message=(
+                    "This key cannot be copied: it was issued before copying was available, or "
+                    "while the server had no encryption key. Issue a new key to get one you can "
+                    "copy."
+                ),
+                code="API_KEY_NOT_COPYABLE",
+            )
+        logger.info("api key %s copied", api_key.id)
+        return open_copy(api_key.encrypted_secret)
+
     async def revoke(self, key_id: uuid.UUID) -> ApiKey:
-        """Kill a key. Effective on its next request — nothing caches the decision."""
+        """Kill a key. Effective on its next request — nothing caches the decision.
+
+        The stored copy goes with it: a revoked key is never worth copying again.
+        """
         api_key = await self.get(key_id)
         if api_key.revoked_at is not None:
             return api_key
         logger.info("api key %s revoked", api_key.id)
-        return await self.keys.update(api_key, revoked_at=datetime.now(UTC))
+        return await self.keys.update(api_key, revoked_at=datetime.now(UTC), encrypted_secret=None)
+
+    async def delete(self, key_id: uuid.UUID) -> None:
+        """Remove a key and its record. Refused from its next request, like a revoked key."""
+        api_key = await self.get(key_id)
+        logger.info("api key %s deleted", api_key.id)
+        await self.keys.delete(api_key)
 
     # -- authentication ------------------------------------------------------
 

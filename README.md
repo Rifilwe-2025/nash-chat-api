@@ -8,10 +8,10 @@ web client or WhatsApp through a generated API key.
 
 | | |
 |---|---|
-| API surface | 80 paths / 104 operations across 14 tags, plus the `/mcp` endpoint |
-| Schema | 19 domain tables, 19 migrations |
-| Error catalogue | 93 stable machine-readable codes |
-| Test suite | 968 tests against a real Postgres |
+| API surface | 82 paths / 108 operations across 14 tags, plus the `/mcp` endpoint |
+| Schema | 19 domain tables, 20 migrations |
+| Error catalogue | 95 stable machine-readable codes |
+| Test suite | 983 tests against a real Postgres |
 
 ---
 
@@ -315,7 +315,8 @@ erDiagram
     api_key {
         uuid id PK
         uuid agent_id FK
-        string key_hash "shown once"
+        string key_hash "authenticates"
+        string encrypted_secret "copy, optional"
         json scopes
         int rate_limit_per_minute
         timestamp revoked_at
@@ -568,15 +569,17 @@ sequenceDiagram
     rect rgb(230, 244, 234)
     Note over U,API: Tenant's product — agent API key
     U->>API: POST /api-keys (scopes, rate limit)
-    API-->>U: plaintext key — <b>shown exactly once</b>
-    Note right of API: only a hash is stored
+    API-->>U: plaintext key
+    Note right of API: a hash to authenticate, and an encrypted<br/>copy to copy again — only with an encryption key
     U->>API: POST /v1/chat/messages<br/>Authorization: Bearer <key> or X-API-Key
     API-->>U: reply + X-RateLimit-*
     end
 ```
 
 Passwords are hashed with **argon2**. A key is issued for one agent, carries explicit scopes and its
-own rate limit, and revocation takes effect on the next request.
+own rate limit, and revocation or deletion takes effect on the next request. With
+`SECURITY_ENCRYPTION_KEY` set, a live key can be copied again (`GET /api-keys/{key_id}/secret`);
+without it no readable copy is stored and the key is shown only when it is issued.
 
 ### Coding agents — MCP
 
@@ -593,7 +596,7 @@ sequenceDiagram
     participant CA as Coding agent
 
     U->>API: POST /mcp-tokens (name, scopes, expiry)
-    API-->>U: nsp_… token — shown exactly once
+    API-->>U: nsp_… token — copyable again only with an encryption key
     U->>CA: add the /mcp endpoint with Authorization: Bearer nsp_…
     CA->>API: POST /mcp — tools/list, tools/call
     API->>API: verify token and account, count the per-token limit
@@ -604,10 +607,10 @@ sequenceDiagram
 | | |
 |---|---|
 | Endpoint | `POST /mcp` — Streamable HTTP, **stateless**, JSON responses, so any worker serves any request |
-| Credential | A **personal access token** (`nsp_…`) issued per user from `/mcp-tokens`, stored as a hash, shown once |
+| Credential | A **personal access token** (`nsp_…`) issued per user from `/mcp-tokens`, authenticated by hash; copyable again from the console only when `SECURITY_ENCRYPTION_KEY` is set |
 | Scopes | `mcp:read` (the default) to inspect; `mcp:write` to create and change — it includes `mcp:read` |
 | Tenancy | The token's own user and tenant. `X-Tenant-Id` is never honoured, and a token is never issued "as" another tenant |
-| Lifetime | Chosen at issue; revocation takes effect on the next request. **Signing in does not revoke a token** — tokens have their own table |
+| Lifetime | Chosen at issue; revocation or deletion takes effect on the next request. **Signing in does not revoke a token** — tokens have their own table |
 | Rate limit | Per token, `MCP_RATE_LIMIT_PER_MINUTE` |
 
 36 tools cover agents and their versions, knowledge bases and sources, retrieval explanations, agent
@@ -752,10 +755,12 @@ token. Every response carries the key's remaining rate-limit allowance.
 | | Method | Path | Description |
 |---|---|---|---|
 | 🔑 | `GET` | `/api-keys` | List API keys |
-| 🔑 | `POST` | `/api-keys` | Issue a key — **plaintext shown exactly once** |
+| 🔑 | `POST` | `/api-keys` | Issue a key — the plaintext is in the response |
 | 🔑 | `GET` | `/api-keys/{key_id}` | Get a key's metadata |
+| 🔑 | `GET` | `/api-keys/{key_id}/secret` | Copy a live key — needs `SECURITY_ENCRYPTION_KEY`; sent `no-store` |
 | 🔑 | `PATCH` | `/api-keys/{key_id}` | Update scopes, rate limit, expiry |
 | 🔑 | `POST` | `/api-keys/{key_id}/revoke` | Revoke — effective on the next request |
+| 🔑 | `DELETE` | `/api-keys/{key_id}` | Delete the key and its record — effective on the next request |
 
 ### `mcp` — coding-agent access
 
@@ -763,9 +768,11 @@ token. Every response carries the key's remaining rate-limit allowance.
 |---|---|---|---|
 | 🔑 | `GET` | `/mcp-tokens/connection` | Endpoint URL, transport, scopes and rate limit, for configuring a client |
 | 🔑 | `GET` | `/mcp-tokens` | List **your own** personal access tokens |
-| 🔑 | `POST` | `/mcp-tokens` | Issue a token — **plaintext shown exactly once** |
+| 🔑 | `POST` | `/mcp-tokens` | Issue a token — the plaintext is in the response |
 | 🔑 | `GET` | `/mcp-tokens/{token_id}` | Get one of your tokens |
+| 🔑 | `GET` | `/mcp-tokens/{token_id}/secret` | Copy one of your live tokens — needs `SECURITY_ENCRYPTION_KEY`; sent `no-store` |
 | 🔑 | `POST` | `/mcp-tokens/{token_id}/revoke` | Revoke — effective on the next request |
+| 🔑 | `DELETE` | `/mcp-tokens/{token_id}` | Delete the token and its record — effective on the next request |
 | 🪪 | `POST` | `/mcp` | The MCP endpoint (Streamable HTTP). Not in the OpenAPI schema: it speaks JSON-RPC, not the envelope |
 
 ### `channels` — reachability and integration
@@ -932,7 +939,7 @@ Sections: `app`, `server`, `database`, `redis`, `llm`, `conversations`, `knowled
 
 | Key | Default | Why it matters |
 |---|---|---|
-| `SECURITY_ENCRYPTION_KEY` | *empty* | Encrypts tenant credentials (WhatsApp tokens, tool keys, webhook secrets) at rest with AES-GCM. **Set it before the first credential is stored** — rows written under a key cannot be read without it. Empty stores them in clear and warns at startup. Local dev and the test suite deliberately run unencrypted. |
+| `SECURITY_ENCRYPTION_KEY` | *empty* | Encrypts tenant credentials (WhatsApp tokens, tool keys, webhook secrets) at rest with AES-GCM. **Set it before the first credential is stored** — rows written under a key cannot be read without it. Empty stores them in clear and warns at startup. It also decides whether issued API keys and personal access tokens can be copied again: with a key an encrypted copy is kept, and without one no copy is stored at all. Local dev and the test suite deliberately run unencrypted. |
 | `JWT_SECRET_KEY` | `CHANGE_ME` | Must be a long random value in any deployed environment. |
 | `QUEUE_MODE` | `inline` | `redis` is the real one — work leaves the request. `inline` runs it in the request instead; fine locally, wrong anywhere real. |
 | `RATE_LIMIT_BACKEND` | `memory` | Use `redis` with more than one worker. |
@@ -1103,8 +1110,8 @@ regression to look for.
 |---|---|
 | Tenant isolation | Query layer, via the shared repository base — not application checks |
 | Password hashing | argon2 |
-| Credential encryption at rest | AES-GCM (`SECURITY_ENCRYPTION_KEY`) for WhatsApp tokens, tool API keys, webhook signing secrets |
-| API keys | Hashed; plaintext shown exactly once; per-key scopes and rate limit |
+| Credential encryption at rest | AES-GCM (`SECURITY_ENCRYPTION_KEY`) for WhatsApp tokens, tool API keys, webhook signing secrets, and the copies of issued API keys and personal access tokens |
+| API keys and personal access tokens | Authenticated by SHA-256 hash; an encrypted copy for copying again, kept only with an encryption key and discarded on revoke; per-key scopes and rate limit |
 | SSRF | Endpoint allowlist per agent for tools; URL fetch guards for KB; `*_ALLOW_PRIVATE_URLS` default false |
 | Browser embedding | Per-agent `allowedOrigins` on the web channel, checked on every `/v1/chat/*` request that carries an `Origin` |
 | Prompt injection | Retrieved and ingested content is delimited as **data, never instructions** |

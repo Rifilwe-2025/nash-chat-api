@@ -1,8 +1,8 @@
 """API key shapes (spec §5.6).
 
-The issue response is the one place in the API that returns a secret, and it is a separate model
-from the read shape so that is structurally true rather than a convention: :class:`ApiKeyResponse`
-has no field the secret could occupy.
+Issuing and copying are the only responses that carry a secret, and each is a separate model from
+the read shape so that is structurally true rather than a convention: :class:`ApiKeyResponse` has
+no field the secret could occupy.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ class UpdateApiKeyRequest(CamelModel):
 
 
 class ApiKeyResponse(CamelModel):
-    """A key as it can be read back. The secret is not here and cannot be recovered."""
+    """A key as it can be read back. The secret is never here — copy it when ``copyable``."""
 
     id: uuid.UUID
     agent_id: uuid.UUID
@@ -69,18 +69,37 @@ class ApiKeyResponse(CamelModel):
     )
     expires_at: datetime | None = None
     active: bool = Field(description="False once the key is revoked or has expired.")
+    copyable: bool = Field(
+        description=(
+            "Whether `GET /api-keys/{keyId}/secret` can return this key again. False once it is "
+            "revoked or expired, and for a key issued before copying existed or while the server "
+            "had no encryption key."
+        )
+    )
     created_at: datetime
 
 
 class IssuedApiKeyResponse(CamelModel):
-    """**The only response that contains the secret.**
+    """The new key's secret.
 
-    It is not stored — only a hash of it is — so this is the one and only time it can be read.
-    Copy it now; if it is lost, issue a new key and revoke this one.
+    ``apiKey.copyable`` says whether it can be copied again later. When it is false no readable copy
+    was kept — only a hash — so this is the one and only time the secret can be read.
     """
 
     key: str = Field(
-        description="The secret. Shown once, never again, and not recoverable.",
+        description=(
+            "The secret. Put it into your integration now — unless `apiKey.copyable` is true, this "
+            "is the only time it is shown."
+        ),
         examples=["nsk_live_7Fq2xR4mN8pQzT1wV6yU3sA9dK0gH5jL"],
     )
     api_key: ApiKeyResponse
+
+
+class ApiKeySecretResponse(CamelModel):
+    """A live key's secret, returned only when the tenant explicitly asks to copy it."""
+
+    key: str = Field(
+        description="The secret, exactly as it was issued.",
+        examples=["nsk_live_7Fq2xR4mN8pQzT1wV6yU3sA9dK0gH5jL"],
+    )

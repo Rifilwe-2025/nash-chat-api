@@ -116,6 +116,12 @@ STATE = {
     "CHANNEL_NEEDS_SETUP_ROUTE": "This channel has its own connect endpoint; use that instead.",
     "INCOMPLETE_CREDENTIALS": "The channel's credentials are missing a required field.",
     "KB_SOURCE_NOT_SYNCABLE": "Only URL and API sources can be re-synced.",
+    "API_KEY_NOT_COPYABLE": (
+        "The key is revoked or expired, or no encrypted copy of it was kept. Issue a new key."
+    ),
+    "PERSONAL_TOKEN_NOT_COPYABLE": (
+        "The token is revoked or expired, or no encrypted copy of it was kept. Issue a new token."
+    ),
     "KB_STORAGE_LIMIT_REACHED": "The tenant's stored-knowledge limit is reached.",
     "WHATSAPP_CONNECTION_INCOMPLETE": "The WhatsApp connection is missing part of its setup.",
     "WHATSAPP_INCOMPLETE_CREDENTIALS": "The Meta credentials are missing a required field.",
