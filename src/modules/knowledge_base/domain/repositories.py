@@ -8,6 +8,7 @@ repository, and scoping the join table as well would add a column that no query 
 
 from __future__ import annotations
 
+import re
 import uuid
 from collections.abc import Sequence
 
@@ -21,6 +22,35 @@ from src.modules.knowledge_base.domain.models import (
 )
 from src.shared.database.pagination import Page, PageRequest
 from src.shared.database.repository import BaseRepository, TenantScopedRepository
+
+_TERM = re.compile(r"[\w.]+")
+# ``websearch_to_tsquery`` reads these as operators; passing them back through as search terms
+# would rebuild the conjunction this widening exists to escape.
+_OPERATORS = frozenset({"or", "and", "not"})
+_MAX_WIDENED_TERMS = 24
+
+
+def widen_query(query_text: str) -> str | None:
+    """Rewrite a question as an OR of its terms, or ``None`` if that would change nothing.
+
+    ``websearch_to_tsquery`` conjoins every non-stopword term, so one word that appears in no
+    document empties the result set rather than merely ranking it lower. That is right for a
+    precise phrase and wrong for how people actually write: "Hi, how much is 20L white PVA?"
+    fails on *hi* and *much*, and a request naming two products can never be satisfied by one
+    document at all.
+
+    Widening keeps ``websearch_to_tsquery`` rather than reaching for ``to_tsquery`` — the same
+    reason the narrow pass uses it, that it cannot be made to raise on punctuation.
+    """
+    terms = [
+        term
+        for term in _TERM.findall(query_text.lower())
+        if term not in _OPERATORS and any(char.isalnum() for char in term)
+    ]
+    unique = list(dict.fromkeys(terms))[:_MAX_WIDENED_TERMS]
+    if len(unique) < 2:
+        return None
+    return " or ".join(unique)
 
 
 class KnowledgeBaseRepository(TenantScopedRepository[KnowledgeBase]):
@@ -132,6 +162,28 @@ class KbSourceRepository(TenantScopedRepository[KbSource]):
         self, kb_ids: Sequence[uuid.UUID], query_text: str, limit: int
     ) -> list[tuple[KbSource, float, str]]:
         """Tier 2: Postgres full-text search, ranked, with the matching passage cut out.
+
+        Two passes. The first takes the question as written, which is precise and is what answers
+        a well-aimed query. When it matches nothing the question is retried with its terms ORed,
+        because an empty result set here is indistinguishable to the agent from "we do not stock
+        that" — it is handed the no-context note and gives its fallback response. Widening only
+        runs where the narrow pass already returned nothing, so it cannot dilute a query that
+        worked; ``ts_rank_cd`` ordering and the caller's ``min_rank`` floor still decide what is
+        worth injecting.
+        """
+        rows = await self._search(kb_ids, query_text, limit)
+        if rows:
+            return rows
+
+        widened = widen_query(query_text)
+        if widened is None:
+            return []
+        return await self._search(kb_ids, widened, limit)
+
+    async def _search(
+        self, kb_ids: Sequence[uuid.UUID], query_text: str, limit: int
+    ) -> list[tuple[KbSource, float, str]]:
+        """One full-text pass. See ``search`` for why there are two.
 
         ``websearch_to_tsquery`` rather than ``plainto_tsquery`` because tenants' end users type
         like they type into a search box — quoted phrases and ``or`` should mean what they look
