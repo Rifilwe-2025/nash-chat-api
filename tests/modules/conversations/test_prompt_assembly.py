@@ -168,3 +168,24 @@ def test_the_rolling_summary_is_included_when_there_is_one() -> None:
     )
 
     assert "order 1234" in prompt
+
+
+def test_an_empty_search_is_not_presented_as_proof_of_absence() -> None:
+    """A miss and a non-existent thing look identical to the model unless the prompt separates
+    them. Retrieval that returns nothing was being read as "we do not have that", and an agent
+    told a customer there was no branch in a town where there is one."""
+    prompt = build_system_prompt(agent(), passages=[], has_context=False)
+
+    assert NO_KNOWLEDGE_NOTE in prompt
+    assert "not evidence that the thing asked about does not exist" in prompt
+    assert "Only state that something does not exist when the knowledge provided says so" in prompt
+
+
+def test_the_absence_note_is_gone_once_there_is_something_to_answer_from() -> None:
+    prompt = build_system_prompt(
+        agent(),
+        passages=[("Branch directory", "Chikwanha (Chitungwiza), 0783642508.")],
+        has_context=True,
+    )
+
+    assert NO_KNOWLEDGE_NOTE not in prompt
