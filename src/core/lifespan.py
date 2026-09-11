@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI
@@ -63,7 +63,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await warn_if_handover_password_unchanged(session)
 
     try:
-        yield
+        async with AsyncExitStack() as stack:
+            # The MCP session manager owns the task group every /mcp request is served in. It must
+            # be running before the first request arrives, and stop before the engine its tools
+            # query is disposed — which is why it is entered inside this block and not after it.
+            mcp_server = getattr(app.state, "mcp_server", None)
+            if mcp_server is not None:
+                await stack.enter_async_context(mcp_server.session_manager.run())
+            yield
     finally:
         await app.state.redis.aclose()
         await engine.dispose()

@@ -188,6 +188,18 @@ whatsapp:
   # Empty falls back to the origin of the request that asked for them.
   public_base_url: "${WHATSAPP_PUBLIC_BASE_URL:} | str"
 
+mcp:
+  # The Model Context Protocol endpoint at /mcp, which lets a developer's own coding agent (Claude
+  # Code, Cursor, VS Code, Codex…) work with the platform using a personal access token. Off removes
+  # the endpoint entirely; the token routes stay, so a console reading them never breaks.
+  enabled: "${MCP_ENABLED:true} | bool"
+  # Requests per minute per personal access token. A single tool call is one request, but an editor
+  # also lists tools and reconnects, so this sits well above what a person drives by hand.
+  rate_limit_per_minute: "${MCP_RATE_LIMIT_PER_MINUTE:120} | int"
+  # The most extracted text one read of a knowledge source returns. A coding agent pages through a
+  # long document with an offset rather than pulling a whole manual into its context in one call.
+  source_text_max_characters: "${MCP_SOURCE_TEXT_MAX_CHARACTERS:20000} | int"
+
 docs:
   enabled: "${DOCS_ENABLED:true} | bool"
   swagger_path: "${DOCS_SWAGGER_PATH:/docs} | str"

@@ -31,6 +31,8 @@ from src.modules.channels.whatsapp.presentation.api import (
 )
 from src.modules.conversations.presentation.api import router as conversations_router
 from src.modules.knowledge_base.presentation.api import router as knowledge_base_router
+from src.modules.mcp.presentation.api import router as mcp_tokens_router
+from src.modules.mcp.presentation.mcp import mount_mcp
 from src.modules.system.presentation.api import router as system_router
 from src.modules.tenants.presentation.api import router as account_router
 from src.modules.tools.presentation.api import router as tools_router
@@ -81,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations_router)
     app.include_router(tools_router)
     app.include_router(api_keys_router)
+    app.include_router(mcp_tokens_router)
     app.include_router(analytics_router)
     app.include_router(admin_router)
     # WhatsApp before the generic channel router: `PUT /agents/{id}/channels/{channel_type}` also
@@ -91,5 +94,10 @@ def create_app() -> FastAPI:
     app.include_router(whatsapp_webhook_router)
     app.include_router(channels_router)
     app.include_router(web_chat_router)
+
+    # The MCP endpoint for coding agents. Off removes the route entirely, rather than leaving one
+    # that answers every request with a refusal.
+    if configs.MCP_ENABLED:
+        mount_mcp(app)
 
     return app

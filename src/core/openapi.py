@@ -85,6 +85,21 @@ TAGS_METADATA: list[dict[str, Any]] = [
         ),
     },
     {
+        "name": "mcp",
+        "description": (
+            "**Model Context Protocol access for coding agents.** Issue a personal access token "
+            "here, then point Claude Code, Cursor, VS Code or any other MCP client at the `/mcp` "
+            "endpoint with `Authorization: Bearer <token>`. The agent works inside your own "
+            "organisation with the scopes the token carries — `mcp:read` to inspect agents, "
+            "knowledge, tools, conversations and analytics; `mcp:write` to create and configure "
+            "them. A token is shown once and only its hash is stored; revoking one takes effect on "
+            "its next request. Tokens are personal: each person lists and revokes only their own. "
+            "Provider keys, tool credentials and agent API keys can be neither read nor set "
+            "through MCP. The `/mcp` endpoint speaks MCP's Streamable HTTP transport rather than "
+            "this envelope, so it is not listed below."
+        ),
+    },
+    {
         "name": "channels",
         "description": (
             "Where an agent is reachable, and what the platform tells you about it. Channel "
