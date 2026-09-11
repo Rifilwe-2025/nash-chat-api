@@ -38,7 +38,15 @@ TOOLS_NOTE = (
     "customer; just use what they return."
 )
 
-NO_KNOWLEDGE_NOTE = "No relevant information was found in the knowledge base for this question."
+NO_KNOWLEDGE_NOTE = (
+    "No relevant information was found in the knowledge base for this question. That is a fact "
+    "about the search, not about the world: it is not evidence that the thing asked about does "
+    "not exist. Do not tell the customer that something does not exist, is not stocked, is not "
+    "available, or that there is no branch, product, price or policy of the kind they asked "
+    "about. Say instead that you cannot confirm it from what you have in front of you, and put "
+    "them on to someone who can. Only state that something does not exist when the knowledge "
+    "provided says so in as many words."
+)
 
 
 @dataclass(frozen=True, slots=True)
